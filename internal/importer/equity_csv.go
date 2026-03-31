@@ -222,13 +222,43 @@ func (e *EquityCSVImporter) Import(path string, accountID *int64) (*EquityImport
 			}
 			if txAccountID > 0 {
 				tx := transactionForDividend(txAccountID, catID, cents, date, symbol, desc)
-				// Insert directly without updating account balance — dividend income
-				// from brokerage CSVs is already reflected in portfolio lot values
-				e.svc.DB().Exec(
-					"INSERT INTO transactions (account_id, category_id, amount, date, payee, note, type) VALUES (?, ?, ?, ?, ?, ?, ?)",
-					tx.AccountID, tx.CategoryID, tx.Amount, tx.Date, tx.Payee, tx.Note, tx.Type)
+				// For managed/brokerage accounts, dividends are already reflected
+				// in portfolio lot values — insert without balance effect.
+				// For cash-like accounts (money_market), use CreateTransaction
+				// so dividends affect the account balance.
+				acc, _ := e.svc.GetAccount(txAccountID)
+				if acc != nil && (acc.Type == model.AccountManaged || acc.Type == model.AccountBrokerage) {
+					e.svc.DB().Exec(
+						"INSERT INTO transactions (account_id, category_id, amount, date, payee, note, type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+						tx.AccountID, tx.CategoryID, tx.Amount, tx.Date, tx.Payee, tx.Note, tx.Type)
+				} else {
+					e.svc.CreateTransaction(tx)
+				}
 			}
 			result.Dividends++
+
+		case "fund_outflow":
+			amount := parseNumber(amountStr)
+			if amount == 0 {
+				result.Skipped++
+				continue
+			}
+			cents := int64(math.Round(math.Abs(amount) * 100))
+			var txAccountID int64
+			if accountID != nil {
+				txAccountID = *accountID
+			}
+			if txAccountID > 0 {
+				tx := model.Transaction{
+					AccountID: txAccountID,
+					Amount:    cents,
+					Date:      date,
+					Payee:     truncateDesc(desc),
+					Type:      model.TxExpense,
+				}
+				e.svc.CreateTransaction(tx)
+			}
+			result.Purchases++
 
 		case "deposit":
 			amount := parseNumber(amountStr)
@@ -282,6 +312,32 @@ func (e *EquityCSVImporter) Import(path string, accountID *int64) (*EquityImport
 				e.svc.CreateTransaction(tx)
 			}
 			result.Dividends++
+
+		case "fee":
+			amount := parseNumber(amountStr)
+			if amount == 0 {
+				result.Skipped++
+				continue
+			}
+			cents := int64(math.Round(math.Abs(amount) * 100))
+			var txAccountID int64
+			if accountID != nil {
+				txAccountID = *accountID
+			}
+			if txAccountID > 0 {
+				tx := model.Transaction{
+					AccountID: txAccountID,
+					Amount:    cents,
+					Date:      date,
+					Payee:     truncateDesc(desc),
+					Type:      model.TxExpense,
+				}
+				e.svc.CreateTransaction(tx)
+			}
+			result.Purchases++
+
+		case "reinvest_shares":
+			result.Skipped++ // $0 share allocation entries
 
 		default:
 			result.Skipped++
@@ -413,12 +469,18 @@ func classifyTransaction(desc string) string {
 		return "dividend"
 	case strings.HasPrefix(d, "security transfer in"):
 		return "transfer_in"
-	case strings.Contains(d, "funds received"):
+	case strings.Contains(d, "funds received") || strings.HasPrefix(d, "withdrawal") || strings.HasPrefix(d, "transfer / adjustment"):
 		return "deposit"
+	case strings.Contains(d, "annual service fee") || strings.Contains(d, "advisory fee"):
+		return "fee"
 	case strings.Contains(d, "advisory program fee") || strings.Contains(d, "advisory fee"):
 		return "fee"
 	case strings.Contains(d, "bank interest"):
 		return "interest"
+	case strings.HasPrefix(d, "reinvestment program") || strings.HasPrefix(d, "subscription"):
+		return "fund_outflow"
+	case strings.HasPrefix(d, "reinvestment share"):
+		return "reinvest_shares"
 	default:
 		return "other"
 	}
