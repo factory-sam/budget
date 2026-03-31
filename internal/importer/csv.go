@@ -1,0 +1,200 @@
+package importer
+
+import (
+	"crypto/sha256"
+	"encoding/csv"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/sam/budget/internal/model"
+	"github.com/sam/budget/internal/service"
+)
+
+type CSVImporter struct {
+	svc *service.Service
+}
+
+func NewCSV(svc *service.Service) *CSVImporter {
+	return &CSVImporter{svc: svc}
+}
+
+func (c *CSVImporter) Import(path string, accountID int64) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	// check for duplicate import
+	hash, err := fileHash(path)
+	if err != nil {
+		return 0, err
+	}
+	var existing int
+	c.svc.DB().QueryRow("SELECT COUNT(*) FROM import_records WHERE hash = ?", hash).Scan(&existing)
+	if existing > 0 {
+		return 0, fmt.Errorf("file already imported (hash: %s)", hash[:12])
+	}
+
+	reader := csv.NewReader(f)
+	header, err := reader.Read()
+	if err != nil {
+		return 0, fmt.Errorf("read header: %w", err)
+	}
+
+	colMap := detectColumns(header)
+	if colMap.date < 0 || colMap.amount < 0 {
+		return 0, fmt.Errorf("could not detect date and amount columns in CSV header: %v", header)
+	}
+
+	count := 0
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		date := ""
+		if colMap.date >= 0 && colMap.date < len(record) {
+			date = normalizeDate(record[colMap.date])
+		}
+
+		amountStr := ""
+		if colMap.amount >= 0 && colMap.amount < len(record) {
+			amountStr = record[colMap.amount]
+		}
+		amount, txType := parseAmount(amountStr)
+
+		payee := ""
+		if colMap.payee >= 0 && colMap.payee < len(record) {
+			payee = strings.TrimSpace(record[colMap.payee])
+		}
+		if payee == "" && colMap.description >= 0 && colMap.description < len(record) {
+			payee = strings.TrimSpace(record[colMap.description])
+		}
+
+		note := ""
+		if colMap.memo >= 0 && colMap.memo < len(record) {
+			note = strings.TrimSpace(record[colMap.memo])
+		}
+
+		catID := c.svc.AutoCategorize(payee)
+
+		tx := model.Transaction{
+			AccountID:  accountID,
+			CategoryID: catID,
+			Amount:     amount,
+			Date:       date,
+			Payee:      payee,
+			Note:       note,
+			Type:       txType,
+		}
+		if _, err := c.svc.CreateTransaction(tx); err != nil {
+			continue
+		}
+		count++
+	}
+
+	c.svc.DB().Exec("INSERT INTO import_records (filename, hash, tx_count) VALUES (?, ?, ?)", path, hash, count)
+	return count, nil
+}
+
+type columnMap struct {
+	date        int
+	amount      int
+	payee       int
+	description int
+	memo        int
+}
+
+func detectColumns(header []string) columnMap {
+	m := columnMap{date: -1, amount: -1, payee: -1, description: -1, memo: -1}
+	for i, h := range header {
+		h = strings.ToLower(strings.TrimSpace(h))
+		switch {
+		case strings.Contains(h, "date"):
+			if m.date < 0 {
+				m.date = i
+			}
+		case h == "amount" || h == "debit" || h == "credit":
+			if m.amount < 0 {
+				m.amount = i
+			}
+		case strings.Contains(h, "payee") || h == "name":
+			m.payee = i
+		case strings.Contains(h, "desc") || strings.Contains(h, "memo") || strings.Contains(h, "narrative"):
+			if m.description < 0 {
+				m.description = i
+			}
+		case strings.Contains(h, "note") || strings.Contains(h, "memo"):
+			m.memo = i
+		}
+	}
+	return m
+}
+
+func parseAmount(s string) (int64, model.TxType) {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, ",", "")
+	s = strings.ReplaceAll(s, "$", "")
+
+	negative := false
+	if strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+		s = s[1 : len(s)-1]
+		negative = true
+	}
+	if strings.HasPrefix(s, "-") {
+		s = s[1:]
+		negative = true
+	}
+
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, model.TxExpense
+	}
+
+	cents := int64(math.Round(f * 100))
+	if negative {
+		return cents, model.TxExpense
+	}
+	return cents, model.TxIncome
+}
+
+func normalizeDate(s string) string {
+	s = strings.TrimSpace(s)
+	// already YYYY-MM-DD
+	if len(s) == 10 && s[4] == '-' {
+		return s
+	}
+	// MM/DD/YYYY
+	parts := strings.Split(s, "/")
+	if len(parts) == 3 {
+		return fmt.Sprintf("%s-%s-%s", parts[2], zeroPad(parts[0]), zeroPad(parts[1]))
+	}
+	return s
+}
+
+func zeroPad(s string) string {
+	if len(s) == 1 {
+		return "0" + s
+	}
+	return s
+}
+
+func fileHash(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	io.Copy(h, f)
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}

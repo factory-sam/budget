@@ -1,0 +1,119 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/sam/budget/internal/model"
+	"github.com/sam/budget/internal/service"
+)
+
+type AccountsModel struct {
+	svc           *service.Service
+	width, height int
+	accounts      []model.Account
+	cursor        int
+}
+
+func NewAccountsModel(svc *service.Service) AccountsModel {
+	return AccountsModel{svc: svc}
+}
+
+type accountDataMsg struct {
+	accounts []model.Account
+}
+
+func (a AccountsModel) Init() tea.Cmd {
+	return func() tea.Msg {
+		accs, _ := a.svc.ListAccounts()
+		return accountDataMsg{accs}
+	}
+}
+
+func (a AccountsModel) Update(msg tea.Msg) (AccountsModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case accountDataMsg:
+		a.accounts = msg.accounts
+		a.cursor = 0
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "j", "down":
+			if a.cursor < len(a.accounts)-1 {
+				a.cursor++
+			}
+		case "k", "up":
+			if a.cursor > 0 {
+				a.cursor--
+			}
+		case "d":
+			if len(a.accounts) > 0 && a.cursor < len(a.accounts) {
+				a.svc.DeleteAccount(a.accounts[a.cursor].ID)
+				return a, a.Init()
+			}
+		}
+	}
+	return a, nil
+}
+
+func (a *AccountsModel) SetSize(w, h int) {
+	a.width = w
+	a.height = h
+}
+
+func (a AccountsModel) View() string {
+	var sb strings.Builder
+	sb.WriteString(headerStyle.Render("Accounts") + "\n\n")
+
+	if len(a.accounts) == 0 {
+		sb.WriteString("  No accounts yet. Add one with:\n")
+		sb.WriteString("  budget account add --name \"My Checking\" --type checking --balance 5000\n")
+		return sb.String()
+	}
+
+	var assets, liabilities []model.Account
+	for _, acc := range a.accounts {
+		if model.IsLiability(acc.Type) {
+			liabilities = append(liabilities, acc)
+		} else {
+			assets = append(assets, acc)
+		}
+	}
+
+	var totalAssets, totalLiabilities int64
+	idx := 0
+
+	if len(assets) > 0 {
+		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(special).Render("  Assets") + "\n")
+		for _, acc := range assets {
+			totalAssets += acc.Balance
+			line := fmt.Sprintf("    %-25s  %-12s  $%.2f", acc.Name, acc.Type, float64(acc.Balance)/100)
+			if idx == a.cursor {
+				line = selectedRowStyle.Render(line)
+			}
+			sb.WriteString(line + "\n")
+			idx++
+		}
+		sb.WriteString(fmt.Sprintf("    %-25s  %-12s  $%.2f\n", "", "Total", float64(totalAssets)/100))
+	}
+
+	if len(liabilities) > 0 {
+		sb.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(danger).Render("  Liabilities") + "\n")
+		for _, acc := range liabilities {
+			totalLiabilities += acc.Balance
+			line := fmt.Sprintf("    %-25s  %-12s  $%.2f", acc.Name, acc.Type, float64(acc.Balance)/100)
+			if idx == a.cursor {
+				line = selectedRowStyle.Render(line)
+			}
+			sb.WriteString(line + "\n")
+			idx++
+		}
+		sb.WriteString(fmt.Sprintf("    %-25s  %-12s  $%.2f\n", "", "Total", float64(totalLiabilities)/100))
+	}
+
+	nw := totalAssets - totalLiabilities
+	sb.WriteString(fmt.Sprintf("\n  Net Worth: $%.2f\n", float64(nw)/100))
+	sb.WriteString(fmt.Sprintf("\n  j/k:navigate  d:delete"))
+	return sb.String()
+}
