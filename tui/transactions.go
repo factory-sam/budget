@@ -29,10 +29,12 @@ type TransactionsModel struct {
 	catFiltered   []model.Category
 	catCursor     int
 	catSearch     string
+	// delete confirmation
+	confirmDelete bool
 }
 
 func (t TransactionsModel) InputActive() bool {
-	return t.searching || t.form.Active() || t.catPicking
+	return t.searching || t.form.Active() || t.catPicking || t.confirmDelete
 }
 
 func NewTransactionsModel(svc *service.Service) TransactionsModel {
@@ -128,6 +130,20 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 			return t, nil
 		}
 
+		if t.confirmDelete {
+			switch msg.String() {
+			case "y", "Y":
+				t.confirmDelete = false
+				if t.cursor < len(t.txs) {
+					t.svc.DeleteTransaction(t.txs[t.cursor].ID)
+					return t, t.Init()
+				}
+			default:
+				t.confirmDelete = false
+			}
+			return t, nil
+		}
+
 		if t.searching {
 			switch msg.String() {
 			case "enter":
@@ -200,8 +216,7 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 			}
 		case "d":
 			if len(t.txs) > 0 && t.cursor < len(t.txs) {
-				t.svc.DeleteTransaction(t.txs[t.cursor].ID)
-				return t, t.Init()
+				t.confirmDelete = true
 			}
 		}
 	}
@@ -358,11 +373,18 @@ func (t TransactionsModel) View() string {
 		b.WriteString(line + "\n")
 	}
 
-	uncatLabel := "u:uncategorized"
-	if t.filter.Uncategorized {
-		uncatLabel = "u:show all"
+	if t.confirmDelete && t.cursor < len(t.txs) {
+		tx := t.txs[t.cursor]
+		b.WriteString(fmt.Sprintf("\n  %s",
+			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).
+				Render(fmt.Sprintf("Delete \"%s\" ($%.2f on %s)? y/N", tx.Payee, math.Abs(float64(tx.Amount))/100, tx.Date))))
+	} else {
+		uncatLabel := "u:uncategorized"
+		if t.filter.Uncategorized {
+			uncatLabel = "u:show all"
+		}
+		b.WriteString(fmt.Sprintf("\n  %d transactions | j/k:navigate  c:categorize  t:type  %s  /:search  d:delete  g/G:top/bottom", len(t.txs), uncatLabel))
 	}
-	b.WriteString(fmt.Sprintf("\n  %d transactions | j/k:navigate  c:categorize  t:type  %s  /:search  d:delete  g/G:top/bottom", len(t.txs), uncatLabel))
 	return b.String()
 }
 
