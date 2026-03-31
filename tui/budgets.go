@@ -76,26 +76,32 @@ func (b BudgetsModel) Update(msg tea.Msg) (BudgetsModel, tea.Cmd) {
 func (b *BudgetsModel) newSetForm() FormModel {
 	svc := b.svc
 	return NewForm("Set Budget", []FormField{
-		{Label: "Category", Placeholder: "e.g. Groceries"},
+		{Label: "Category", Placeholder: "e.g. Groceries, Rent, Streaming"},
 		{Label: "Monthly Limit", Placeholder: "e.g. 600"},
-	}, func(fields []FormField) tea.Cmd {
+	}, func(fields []FormField) (tea.Cmd, string) {
 		catName := strings.TrimSpace(fields[0].Value)
 		amtStr := strings.TrimSpace(fields[1].Value)
-		if catName == "" || amtStr == "" {
-			return nil
+		if catName == "" {
+			return nil, "Category is required"
+		}
+		if amtStr == "" {
+			return nil, "Monthly limit is required"
 		}
 		cat, err := svc.FindCategoryByName(catName)
 		if err != nil {
-			return nil
+			return nil, fmt.Sprintf("Category %q not found — try: Groceries, Rent/Mortgage, Streaming, etc.", catName)
 		}
-		amount, _ := strconv.ParseFloat(amtStr, 64)
+		amount, err := strconv.ParseFloat(amtStr, 64)
+		if err != nil || amount <= 0 {
+			return nil, "Invalid amount — enter a number like 600"
+		}
 		cents := int64(math.Round(amount * 100))
 		now := time.Now()
 		svc.SetBudget(cat.ID, now.Year(), int(now.Month()), cents)
 		return func() tea.Msg {
 			statuses, _ := svc.GetBudgetStatus(now.Year(), int(now.Month()))
 			return budgetDataMsg{statuses}
-		}
+		}, ""
 	})
 }
 

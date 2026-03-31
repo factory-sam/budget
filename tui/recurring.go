@@ -86,7 +86,7 @@ func (r *RecurringModel) newAddForm() FormModel {
 		{Label: "Frequency", Value: "monthly", Options: []string{"weekly", "biweekly", "monthly", "yearly"}},
 		{Label: "Type", Value: "expense", Options: []string{"expense", "income"}},
 		{Label: "Start Date", Placeholder: "YYYY-MM-DD"},
-	}, func(fields []FormField) tea.Cmd {
+	}, func(fields []FormField) (tea.Cmd, string) {
 		payee := strings.TrimSpace(fields[0].Value)
 		amtStr := strings.TrimSpace(fields[1].Value)
 		catName := strings.TrimSpace(fields[2].Value)
@@ -95,24 +95,37 @@ func (r *RecurringModel) newAddForm() FormModel {
 		txType := fields[5].Value
 		startDate := strings.TrimSpace(fields[6].Value)
 
-		if payee == "" || amtStr == "" || accName == "" || startDate == "" {
-			return nil
+		if payee == "" {
+			return nil, "Payee is required"
+		}
+		if amtStr == "" {
+			return nil, "Amount is required"
+		}
+		if accName == "" {
+			return nil, "Account is required"
+		}
+		if startDate == "" {
+			return nil, "Start date is required"
 		}
 
 		acc, err := svc.GetAccountByName(accName)
 		if err != nil {
-			return nil
+			return nil, fmt.Sprintf("Account %q not found", accName)
 		}
 
-		amount, _ := strconv.ParseFloat(amtStr, 64)
+		amount, err := strconv.ParseFloat(amtStr, 64)
+		if err != nil || amount <= 0 {
+			return nil, "Invalid amount — enter a number like 15.99"
+		}
 		cents := int64(math.Round(amount * 100))
 
 		var catID *int64
 		if catName != "" {
 			c, err := svc.FindCategoryByName(catName)
-			if err == nil {
-				catID = &c.ID
+			if err != nil {
+				return nil, fmt.Sprintf("Category %q not found", catName)
 			}
+			catID = &c.ID
 		}
 
 		rule := model.RecurringRule{
@@ -130,7 +143,7 @@ func (r *RecurringModel) newAddForm() FormModel {
 		return func() tea.Msg {
 			rules, _ := svc.ListRecurringRules()
 			return recurringDataMsg{rules}
-		}
+		}, ""
 	})
 }
 

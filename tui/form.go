@@ -21,11 +21,11 @@ type FormModel struct {
 	Fields   []FormField
 	focused  int
 	active   bool
-	onSubmit func(fields []FormField) tea.Cmd
+	onSubmit func(fields []FormField) (tea.Cmd, string)
 	err      string
 }
 
-func NewForm(title string, fields []FormField, onSubmit func([]FormField) tea.Cmd) FormModel {
+func NewForm(title string, fields []FormField, onSubmit func([]FormField) (tea.Cmd, string)) FormModel {
 	return FormModel{
 		Title:    title,
 		Fields:   fields,
@@ -69,7 +69,11 @@ func (f FormModel) Update(msg tea.Msg) (FormModel, tea.Cmd) {
 			}
 			// on last field, submit
 			if f.onSubmit != nil {
-				cmd := f.onSubmit(f.Fields)
+				cmd, errMsg := f.onSubmit(f.Fields)
+				if errMsg != "" {
+					f.err = errMsg
+					return f, nil
+				}
 				f.active = false
 				f.err = ""
 				return f, cmd

@@ -120,7 +120,7 @@ func (t *TransactionsModel) newAddForm() FormModel {
 		{Label: "Type", Value: "expense", Options: []string{"expense", "income", "transfer"}},
 		{Label: "Date", Value: time.Now().Format("2006-01-02")},
 		{Label: "Note", Placeholder: "optional"},
-	}, func(fields []FormField) tea.Cmd {
+	}, func(fields []FormField) (tea.Cmd, string) {
 		amtStr := strings.TrimSpace(fields[0].Value)
 		payee := strings.TrimSpace(fields[1].Value)
 		catName := strings.TrimSpace(fields[2].Value)
@@ -129,23 +129,30 @@ func (t *TransactionsModel) newAddForm() FormModel {
 		date := strings.TrimSpace(fields[5].Value)
 		note := strings.TrimSpace(fields[6].Value)
 
-		if amtStr == "" || accName == "" {
-			return nil
+		if amtStr == "" {
+			return nil, "Amount is required"
 		}
-		amount, _ := strconv.ParseFloat(amtStr, 64)
+		if accName == "" {
+			return nil, "Account is required"
+		}
+		amount, err := strconv.ParseFloat(amtStr, 64)
+		if err != nil || amount <= 0 {
+			return nil, "Invalid amount — enter a number like 45.50"
+		}
 		cents := int64(math.Round(amount * 100))
 
 		acc, err := svc.GetAccountByName(accName)
 		if err != nil {
-			return nil
+			return nil, fmt.Sprintf("Account %q not found", accName)
 		}
 
 		var catID *int64
 		if catName != "" {
 			c, err := svc.FindCategoryByName(catName)
-			if err == nil {
-				catID = &c.ID
+			if err != nil {
+				return nil, fmt.Sprintf("Category %q not found — try: Groceries, Rent/Mortgage, Streaming, etc.", catName)
 			}
+			catID = &c.ID
 		}
 		if catID == nil {
 			catID = svc.AutoCategorize(payee)
@@ -169,7 +176,7 @@ func (t *TransactionsModel) newAddForm() FormModel {
 		return func() tea.Msg {
 			txs, _ := svc.ListTransactions(filter)
 			return txDataMsg{txs}
-		}
+		}, ""
 	})
 }
 

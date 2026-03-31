@@ -82,23 +82,30 @@ func (a *AccountsModel) newAddForm() FormModel {
 		{Label: "Name", Placeholder: "e.g. Chase Checking"},
 		{Label: "Type", Value: "checking", Options: []string{"checking", "savings", "credit_card", "investment", "loan", "cash"}},
 		{Label: "Balance", Placeholder: "0.00"},
-	}, func(fields []FormField) tea.Cmd {
+	}, func(fields []FormField) (tea.Cmd, string) {
 		name := strings.TrimSpace(fields[0].Value)
 		typ := fields[1].Value
 		balStr := strings.TrimSpace(fields[2].Value)
 		if name == "" {
-			return nil
+			return nil, "Name is required"
 		}
 		bal := 0.0
 		if balStr != "" {
-			bal, _ = strconv.ParseFloat(balStr, 64)
+			var err error
+			bal, err = strconv.ParseFloat(balStr, 64)
+			if err != nil {
+				return nil, "Invalid balance — enter a number like 5000"
+			}
 		}
 		cents := int64(math.Round(bal * 100))
-		svc.CreateAccount(name, model.AccountType(typ), cents)
+		_, err := svc.CreateAccount(name, model.AccountType(typ), cents)
+		if err != nil {
+			return nil, fmt.Sprintf("Error: %v", err)
+		}
 		return func() tea.Msg {
 			accs, _ := svc.ListAccounts()
 			return accountDataMsg{accs}
-		}
+		}, ""
 	})
 }
 

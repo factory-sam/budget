@@ -121,16 +121,29 @@ func (s *Service) ListCategoryGroups() ([]model.CategoryGroup, error) {
 }
 
 func (s *Service) FindCategoryByName(name string) (*model.Category, error) {
+	// try exact match first
 	var c model.Category
 	err := s.db.QueryRow(`
 		SELECT c.id, c.group_id, g.name, c.name, c.icon, c.sort_order
 		FROM categories c JOIN category_groups g ON c.group_id = g.id
 		WHERE LOWER(c.name) = LOWER(?)`, name).
 		Scan(&c.ID, &c.GroupID, &c.GroupName, &c.Name, &c.Icon, &c.SortOrder)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		return &c, nil
 	}
-	return &c, nil
+
+	// fall back to prefix/substring match
+	err = s.db.QueryRow(`
+		SELECT c.id, c.group_id, g.name, c.name, c.icon, c.sort_order
+		FROM categories c JOIN category_groups g ON c.group_id = g.id
+		WHERE LOWER(c.name) LIKE LOWER(?) || '%'
+		ORDER BY LENGTH(c.name) LIMIT 1`, name).
+		Scan(&c.ID, &c.GroupID, &c.GroupName, &c.Name, &c.Icon, &c.SortOrder)
+	if err == nil {
+		return &c, nil
+	}
+
+	return nil, fmt.Errorf("category %q not found", name)
 }
 
 func (s *Service) CreateCategory(groupName, catName string) (*model.Category, error) {
