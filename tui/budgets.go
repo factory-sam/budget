@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +18,10 @@ type BudgetsModel struct {
 	width, height int
 	statuses      []model.BudgetStatus
 	cursor        int
+	form          FormModel
 }
+
+func (b BudgetsModel) InputActive() bool { return b.form.Active() }
 
 func NewBudgetsModel(svc *service.Service) BudgetsModel {
 	return BudgetsModel{svc: svc}
@@ -35,6 +40,12 @@ func (b BudgetsModel) Init() tea.Cmd {
 }
 
 func (b BudgetsModel) Update(msg tea.Msg) (BudgetsModel, tea.Cmd) {
+	if b.form.Active() {
+		var cmd tea.Cmd
+		b.form, cmd = b.form.Update(msg)
+		return b, cmd
+	}
+
 	switch msg := msg.(type) {
 	case budgetDataMsg:
 		b.statuses = msg.statuses
@@ -49,9 +60,43 @@ func (b BudgetsModel) Update(msg tea.Msg) (BudgetsModel, tea.Cmd) {
 			if b.cursor > 0 {
 				b.cursor--
 			}
+		case "g":
+			b.cursor = 0
+		case "G":
+			if len(b.statuses) > 0 {
+				b.cursor = len(b.statuses) - 1
+			}
+		case "a":
+			b.form = b.newSetForm()
 		}
 	}
 	return b, nil
+}
+
+func (b *BudgetsModel) newSetForm() FormModel {
+	svc := b.svc
+	return NewForm("Set Budget", []FormField{
+		{Label: "Category", Placeholder: "e.g. Groceries"},
+		{Label: "Monthly Limit", Placeholder: "e.g. 600"},
+	}, func(fields []FormField) tea.Cmd {
+		catName := strings.TrimSpace(fields[0].Value)
+		amtStr := strings.TrimSpace(fields[1].Value)
+		if catName == "" || amtStr == "" {
+			return nil
+		}
+		cat, err := svc.FindCategoryByName(catName)
+		if err != nil {
+			return nil
+		}
+		amount, _ := strconv.ParseFloat(amtStr, 64)
+		cents := int64(math.Round(amount * 100))
+		now := time.Now()
+		svc.SetBudget(cat.ID, now.Year(), int(now.Month()), cents)
+		return func() tea.Msg {
+			statuses, _ := svc.GetBudgetStatus(now.Year(), int(now.Month()))
+			return budgetDataMsg{statuses}
+		}
+	})
 }
 
 func (b *BudgetsModel) SetSize(w, h int) {
@@ -60,6 +105,10 @@ func (b *BudgetsModel) SetSize(w, h int) {
 }
 
 func (b BudgetsModel) View() string {
+	if b.form.Active() {
+		return b.form.View()
+	}
+
 	now := time.Now()
 	var sb strings.Builder
 	sb.WriteString(headerStyle.Render(fmt.Sprintf("Budgets — %s %d", now.Month().String(), now.Year())) + "\n\n")

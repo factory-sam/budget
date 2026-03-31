@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,7 +17,10 @@ type RecurringModel struct {
 	width, height int
 	rules         []model.RecurringRule
 	cursor        int
+	form          FormModel
 }
+
+func (r RecurringModel) InputActive() bool { return r.form.Active() }
 
 func NewRecurringModel(svc *service.Service) RecurringModel {
 	return RecurringModel{svc: svc}
@@ -33,6 +38,12 @@ func (r RecurringModel) Init() tea.Cmd {
 }
 
 func (r RecurringModel) Update(msg tea.Msg) (RecurringModel, tea.Cmd) {
+	if r.form.Active() {
+		var cmd tea.Cmd
+		r.form, cmd = r.form.Update(msg)
+		return r, cmd
+	}
+
 	switch msg := msg.(type) {
 	case recurringDataMsg:
 		r.rules = msg.rules
@@ -47,6 +58,14 @@ func (r RecurringModel) Update(msg tea.Msg) (RecurringModel, tea.Cmd) {
 			if r.cursor > 0 {
 				r.cursor--
 			}
+		case "g":
+			r.cursor = 0
+		case "G":
+			if len(r.rules) > 0 {
+				r.cursor = len(r.rules) - 1
+			}
+		case "a":
+			r.form = r.newAddForm()
 		case "d":
 			if len(r.rules) > 0 && r.cursor < len(r.rules) {
 				r.svc.DeleteRecurringRule(r.rules[r.cursor].ID)
@@ -57,12 +76,74 @@ func (r RecurringModel) Update(msg tea.Msg) (RecurringModel, tea.Cmd) {
 	return r, nil
 }
 
+func (r *RecurringModel) newAddForm() FormModel {
+	svc := r.svc
+	return NewForm("Add Recurring Rule", []FormField{
+		{Label: "Payee", Placeholder: "e.g. Netflix"},
+		{Label: "Amount", Placeholder: "0.00"},
+		{Label: "Category", Placeholder: "e.g. Streaming"},
+		{Label: "Account", Placeholder: "e.g. Checking"},
+		{Label: "Frequency", Value: "monthly", Options: []string{"weekly", "biweekly", "monthly", "yearly"}},
+		{Label: "Type", Value: "expense", Options: []string{"expense", "income"}},
+		{Label: "Start Date", Placeholder: "YYYY-MM-DD"},
+	}, func(fields []FormField) tea.Cmd {
+		payee := strings.TrimSpace(fields[0].Value)
+		amtStr := strings.TrimSpace(fields[1].Value)
+		catName := strings.TrimSpace(fields[2].Value)
+		accName := strings.TrimSpace(fields[3].Value)
+		freq := fields[4].Value
+		txType := fields[5].Value
+		startDate := strings.TrimSpace(fields[6].Value)
+
+		if payee == "" || amtStr == "" || accName == "" || startDate == "" {
+			return nil
+		}
+
+		acc, err := svc.GetAccountByName(accName)
+		if err != nil {
+			return nil
+		}
+
+		amount, _ := strconv.ParseFloat(amtStr, 64)
+		cents := int64(math.Round(amount * 100))
+
+		var catID *int64
+		if catName != "" {
+			c, err := svc.FindCategoryByName(catName)
+			if err == nil {
+				catID = &c.ID
+			}
+		}
+
+		rule := model.RecurringRule{
+			AccountID: acc.ID,
+			CategoryID: catID,
+			Amount:    cents,
+			Payee:     payee,
+			Frequency: model.Frequency(freq),
+			StartDate: startDate,
+			NextDue:   startDate,
+			Type:      model.TxType(txType),
+		}
+		svc.CreateRecurringRule(rule)
+
+		return func() tea.Msg {
+			rules, _ := svc.ListRecurringRules()
+			return recurringDataMsg{rules}
+		}
+	})
+}
+
 func (r *RecurringModel) SetSize(w, h int) {
 	r.width = w
 	r.height = h
 }
 
 func (r RecurringModel) View() string {
+	if r.form.Active() {
+		return r.form.View()
+	}
+
 	var sb strings.Builder
 	sb.WriteString(headerStyle.Render("Recurring Transactions") + "\n\n")
 

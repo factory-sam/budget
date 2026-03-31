@@ -2,7 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -19,7 +22,10 @@ type TransactionsModel struct {
 	search        string
 	searching     bool
 	filter        model.TxFilter
+	form          FormModel
 }
+
+func (t TransactionsModel) InputActive() bool { return t.searching || t.form.Active() }
 
 func NewTransactionsModel(svc *service.Service) TransactionsModel {
 	return TransactionsModel{svc: svc, filter: model.TxFilter{Limit: 100}}
@@ -37,6 +43,12 @@ func (t TransactionsModel) Init() tea.Cmd {
 }
 
 func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
+	if t.form.Active() {
+		var cmd tea.Cmd
+		t.form, cmd = t.form.Update(msg)
+		return t, cmd
+	}
+
 	switch msg := msg.(type) {
 	case txDataMsg:
 		t.txs = msg.txs
@@ -85,6 +97,8 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 		case "/":
 			t.searching = true
 			t.search = ""
+		case "a":
+			t.form = t.newAddForm()
 		case "d":
 			if len(t.txs) > 0 && t.cursor < len(t.txs) {
 				t.svc.DeleteTransaction(t.txs[t.cursor].ID)
@@ -95,12 +109,80 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 	return t, nil
 }
 
+func (t *TransactionsModel) newAddForm() FormModel {
+	svc := t.svc
+	filter := t.filter
+	return NewForm("Add Transaction", []FormField{
+		{Label: "Amount", Placeholder: "0.00"},
+		{Label: "Payee", Placeholder: "e.g. Whole Foods"},
+		{Label: "Category", Placeholder: "e.g. Groceries"},
+		{Label: "Account", Placeholder: "e.g. Checking"},
+		{Label: "Type", Value: "expense", Options: []string{"expense", "income", "transfer"}},
+		{Label: "Date", Value: time.Now().Format("2006-01-02")},
+		{Label: "Note", Placeholder: "optional"},
+	}, func(fields []FormField) tea.Cmd {
+		amtStr := strings.TrimSpace(fields[0].Value)
+		payee := strings.TrimSpace(fields[1].Value)
+		catName := strings.TrimSpace(fields[2].Value)
+		accName := strings.TrimSpace(fields[3].Value)
+		txType := fields[4].Value
+		date := strings.TrimSpace(fields[5].Value)
+		note := strings.TrimSpace(fields[6].Value)
+
+		if amtStr == "" || accName == "" {
+			return nil
+		}
+		amount, _ := strconv.ParseFloat(amtStr, 64)
+		cents := int64(math.Round(amount * 100))
+
+		acc, err := svc.GetAccountByName(accName)
+		if err != nil {
+			return nil
+		}
+
+		var catID *int64
+		if catName != "" {
+			c, err := svc.FindCategoryByName(catName)
+			if err == nil {
+				catID = &c.ID
+			}
+		}
+		if catID == nil {
+			catID = svc.AutoCategorize(payee)
+		}
+
+		if date == "" {
+			date = time.Now().Format("2006-01-02")
+		}
+
+		tx := model.Transaction{
+			AccountID:  acc.ID,
+			CategoryID: catID,
+			Amount:     cents,
+			Date:       date,
+			Payee:      payee,
+			Note:       note,
+			Type:       model.TxType(txType),
+		}
+		svc.CreateTransaction(tx)
+
+		return func() tea.Msg {
+			txs, _ := svc.ListTransactions(filter)
+			return txDataMsg{txs}
+		}
+	})
+}
+
 func (t *TransactionsModel) SetSize(w, h int) {
 	t.width = w
 	t.height = h
 }
 
 func (t TransactionsModel) View() string {
+	if t.form.Active() {
+		return t.form.View()
+	}
+
 	var b strings.Builder
 
 	if t.searching {

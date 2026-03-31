@@ -72,6 +72,20 @@ func (a *App) Init() tea.Cmd {
 	)
 }
 
+func (a *App) childInputActive() bool {
+	switch a.activeTab {
+	case TabTransactions:
+		return a.transactions.InputActive()
+	case TabAccounts:
+		return a.accounts.InputActive()
+	case TabBudgets:
+		return a.budgets.InputActive()
+	case TabRecurring:
+		return a.recurring.InputActive()
+	}
+	return false
+}
+
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -81,6 +95,26 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.String() == "esc" {
 				a.showModal = false
 				return a, nil
+			}
+			return a, cmd
+		}
+
+		// When a child view has an active text input, send keys there directly.
+		// Only ctrl+c still quits.
+		if a.childInputActive() {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			var cmd tea.Cmd
+			switch a.activeTab {
+			case TabTransactions:
+				a.transactions, cmd = a.transactions.Update(msg)
+			case TabAccounts:
+				a.accounts, cmd = a.accounts.Update(msg)
+			case TabBudgets:
+				a.budgets, cmd = a.budgets.Update(msg)
+			case TabRecurring:
+				a.recurring, cmd = a.recurring.Update(msg)
 			}
 			return a, cmd
 		}
@@ -208,8 +242,8 @@ func (a *App) View() string {
 		content = a.portfolio.View()
 	}
 
-	// Status bar
-	help := statusBarStyle.Render("?:help  a:add  e:edit  d:delete  /:search  tab:switch  q:quit")
+	// Status bar — context-aware per tab
+	help := statusBarStyle.Render(a.helpText())
 
 	// Compose
 	header := titleStyle.Render("budget") + "  " + tabBar
@@ -224,4 +258,37 @@ func (a *App) View() string {
 	view += "\n" + help
 
 	return view
+}
+
+func (a *App) helpText() string {
+	common := "1-7:tabs  tab/shift+tab:switch  q:quit"
+	switch a.activeTab {
+	case TabDashboard:
+		return common
+	case TabTransactions:
+		if a.transactions.InputActive() {
+			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+		}
+		return "j/k:navigate  a:add  /:search  d:delete  g/G:top/bottom  " + common
+	case TabBudgets:
+		if a.budgets.InputActive() {
+			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+		}
+		return "j/k:navigate  a:set budget  g/G:top/bottom  " + common
+	case TabAccounts:
+		if a.accounts.InputActive() {
+			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+		}
+		return "j/k:navigate  a:add  g/G:top/bottom  d:delete  " + common
+	case TabRecurring:
+		if a.recurring.InputActive() {
+			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+		}
+		return "j/k:navigate  a:add  g/G:top/bottom  d:delete  " + common
+	case TabReports:
+		return "h/l:switch reports  " + common
+	case TabPortfolio:
+		return "j/k:navigate  g:grants  p:positions  r:refresh  G:bottom  " + common
+	}
+	return common
 }

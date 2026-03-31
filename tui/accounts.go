@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,7 +17,10 @@ type AccountsModel struct {
 	width, height int
 	accounts      []model.Account
 	cursor        int
+	form          FormModel
 }
+
+func (a AccountsModel) InputActive() bool { return a.form.Active() }
 
 func NewAccountsModel(svc *service.Service) AccountsModel {
 	return AccountsModel{svc: svc}
@@ -33,6 +38,12 @@ func (a AccountsModel) Init() tea.Cmd {
 }
 
 func (a AccountsModel) Update(msg tea.Msg) (AccountsModel, tea.Cmd) {
+	if a.form.Active() {
+		var cmd tea.Cmd
+		a.form, cmd = a.form.Update(msg)
+		return a, cmd
+	}
+
 	switch msg := msg.(type) {
 	case accountDataMsg:
 		a.accounts = msg.accounts
@@ -47,6 +58,14 @@ func (a AccountsModel) Update(msg tea.Msg) (AccountsModel, tea.Cmd) {
 			if a.cursor > 0 {
 				a.cursor--
 			}
+		case "g":
+			a.cursor = 0
+		case "G":
+			if len(a.accounts) > 0 {
+				a.cursor = len(a.accounts) - 1
+			}
+		case "a":
+			a.form = a.newAddForm()
 		case "d":
 			if len(a.accounts) > 0 && a.cursor < len(a.accounts) {
 				a.svc.DeleteAccount(a.accounts[a.cursor].ID)
@@ -57,12 +76,42 @@ func (a AccountsModel) Update(msg tea.Msg) (AccountsModel, tea.Cmd) {
 	return a, nil
 }
 
+func (a *AccountsModel) newAddForm() FormModel {
+	svc := a.svc
+	return NewForm("Add Account", []FormField{
+		{Label: "Name", Placeholder: "e.g. Chase Checking"},
+		{Label: "Type", Value: "checking", Options: []string{"checking", "savings", "credit_card", "investment", "loan", "cash"}},
+		{Label: "Balance", Placeholder: "0.00"},
+	}, func(fields []FormField) tea.Cmd {
+		name := strings.TrimSpace(fields[0].Value)
+		typ := fields[1].Value
+		balStr := strings.TrimSpace(fields[2].Value)
+		if name == "" {
+			return nil
+		}
+		bal := 0.0
+		if balStr != "" {
+			bal, _ = strconv.ParseFloat(balStr, 64)
+		}
+		cents := int64(math.Round(bal * 100))
+		svc.CreateAccount(name, model.AccountType(typ), cents)
+		return func() tea.Msg {
+			accs, _ := svc.ListAccounts()
+			return accountDataMsg{accs}
+		}
+	})
+}
+
 func (a *AccountsModel) SetSize(w, h int) {
 	a.width = w
 	a.height = h
 }
 
 func (a AccountsModel) View() string {
+	if a.form.Active() {
+		return a.form.View()
+	}
+
 	var sb strings.Builder
 	sb.WriteString(headerStyle.Render("Accounts") + "\n\n")
 

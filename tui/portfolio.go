@@ -80,12 +80,21 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 			if p.cursor > 0 {
 				p.cursor--
 			}
-		case "l":
+		case "p":
 			p.subView = PortfolioPositions
 			p.cursor = 0
 		case "g":
-			p.subView = PortfolioGrants
-			p.cursor = 0
+			if p.subView == PortfolioPositions {
+				p.subView = PortfolioGrants
+			} else {
+				// go to top
+				p.cursor = 0
+			}
+		case "G":
+			maxLen := p.currentListLen()
+			if maxLen > 0 {
+				p.cursor = maxLen - 1
+			}
 		case "r":
 			p.refreshing = true
 			return p, func() tea.Msg {
@@ -142,7 +151,7 @@ func (p PortfolioModel) View() string {
 		sb.WriteString(p.viewGrants())
 	}
 
-	sb.WriteString("\n  j/k:navigate  l:positions  g:grants  r:refresh prices")
+	sb.WriteString("\n  j/k:navigate  g:grants  p:positions  r:refresh prices  G:bottom")
 	return sb.String()
 }
 
