@@ -26,6 +26,17 @@ type FormModel struct {
 }
 
 func NewForm(title string, fields []FormField, onSubmit func([]FormField) (tea.Cmd, string)) FormModel {
+	// sync optionIdx with initial Value
+	for i := range fields {
+		if len(fields[i].Options) > 0 && fields[i].Value != "" {
+			for j, opt := range fields[i].Options {
+				if opt == fields[i].Value {
+					fields[i].optionIdx = j
+					break
+				}
+			}
+		}
+	}
 	return FormModel{
 		Title:    title,
 		Fields:   fields,

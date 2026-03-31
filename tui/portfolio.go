@@ -2,7 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -15,6 +18,7 @@ type PortfolioSubView int
 const (
 	PortfolioPositions PortfolioSubView = iota
 	PortfolioGrants
+	PortfolioVestSchedule
 )
 
 type PortfolioModel struct {
@@ -25,10 +29,16 @@ type PortfolioModel struct {
 	width, height int
 	summary       *model.PortfolioSummary
 	grantList     []model.EquityGrant
+	vestEvents    []model.VestEvent
+	vestGrantID   int64
 	cursor        int
 	subView       PortfolioSubView
 	refreshing    bool
+	form          FormModel
+	statusMsg     string
 }
+
+func (p PortfolioModel) InputActive() bool { return p.form.Active() }
 
 func NewPortfolioModel(prices *equity.PriceService, portfolio *equity.PortfolioService, grants *equity.GrantService) PortfolioModel {
 	return PortfolioModel{
@@ -54,18 +64,34 @@ func (p PortfolioModel) Init() tea.Cmd {
 }
 
 func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
+	if p.form.Active() {
+		var cmd tea.Cmd
+		p.form, cmd = p.form.Update(msg)
+		return p, cmd
+	}
+
 	switch msg := msg.(type) {
 	case portfolioDataMsg:
-		p.summary = msg.summary
-		p.grantList = msg.grants
+		if msg.summary != nil {
+			p.summary = msg.summary
+		}
+		if msg.grants != nil {
+			p.grantList = msg.grants
+		}
 		p.cursor = 0
 		p.refreshing = false
+
+	case vestScheduleRefreshMsg:
+		p.vestEvents = msg.events
+		p.cursor = 0
+		p.statusMsg = "ISO exercised successfully"
 
 	case priceRefreshDoneMsg:
 		p.refreshing = false
 		return p, p.Init()
 
 	case tea.KeyMsg:
+		p.statusMsg = ""
 		switch msg.String() {
 		case "j", "down":
 			p.cursor++
@@ -87,13 +113,37 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 			if p.subView == PortfolioPositions {
 				p.subView = PortfolioGrants
 			} else {
-				// go to top
 				p.cursor = 0
 			}
 		case "G":
 			maxLen := p.currentListLen()
 			if maxLen > 0 {
 				p.cursor = maxLen - 1
+			}
+		case "a":
+			switch p.subView {
+			case PortfolioPositions:
+				p.form = p.newBuyForm()
+			case PortfolioGrants:
+				p.form = p.newGrantForm()
+			}
+		case "d":
+			return p.handleDelete()
+		case "v":
+			if p.subView == PortfolioGrants {
+				return p.handleVest()
+			}
+			if p.subView == PortfolioVestSchedule {
+				return p.handleExercise()
+			}
+		case "s":
+			if p.subView == PortfolioGrants && p.cursor < len(p.grantList) {
+				grant := p.grantList[p.cursor]
+				events, _ := p.grants.GetVestSchedule(grant.ID)
+				p.vestEvents = events
+				p.vestGrantID = grant.ID
+				p.subView = PortfolioVestSchedule
+				p.cursor = 0
 			}
 		case "r":
 			p.refreshing = true
@@ -102,8 +152,68 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 				p.prices.FetchPrices(tickers)
 				return priceRefreshDoneMsg{}
 			}
+		case "esc":
+			if p.subView == PortfolioVestSchedule {
+				p.subView = PortfolioGrants
+				p.cursor = 0
+			}
 		}
 	}
+	return p, nil
+}
+
+func (p PortfolioModel) handleDelete() (PortfolioModel, tea.Cmd) {
+	switch p.subView {
+	case PortfolioPositions:
+		if p.summary != nil && p.cursor < len(p.summary.Positions) {
+			pos := p.summary.Positions[p.cursor]
+			// delete all lots for this position
+			for _, lot := range pos.Lots {
+				p.portfolio.SellLot(lot.ID, lot.Shares)
+			}
+			p.statusMsg = fmt.Sprintf("Deleted all %s lots", pos.Ticker)
+			return p, p.Init()
+		}
+	case PortfolioGrants:
+		if p.cursor < len(p.grantList) {
+			grant := p.grantList[p.cursor]
+			p.grants.DeleteGrant(grant.ID)
+			p.statusMsg = fmt.Sprintf("Deleted %s %s grant", grant.Ticker, strings.ToUpper(grant.GrantType))
+			return p, p.Init()
+		}
+	}
+	return p, nil
+}
+
+func (p PortfolioModel) handleVest() (PortfolioModel, tea.Cmd) {
+	if p.cursor >= len(p.grantList) {
+		return p, nil
+	}
+	grant := p.grantList[p.cursor]
+	count, err := p.grants.VestGrant(grant.ID, nil)
+	if err != nil {
+		p.statusMsg = fmt.Sprintf("Vest error: %v", err)
+		return p, nil
+	}
+	if count == 0 {
+		p.statusMsg = "No pending vest events due today"
+	} else {
+		p.statusMsg = fmt.Sprintf("Vested %d events for %s %s", count, grant.Ticker, strings.ToUpper(grant.GrantType))
+	}
+	return p, p.Init()
+}
+
+func (p PortfolioModel) handleExercise() (PortfolioModel, tea.Cmd) {
+	if p.cursor >= len(p.vestEvents) {
+		return p, nil
+	}
+	event := p.vestEvents[p.cursor]
+	if event.Status != "vested" {
+		p.statusMsg = fmt.Sprintf("Event #%d is %s — only vested events can be exercised", event.ID, event.Status)
+		return p, nil
+	}
+	// open exercise form with FMV input
+	p.form = p.newExerciseForm(event)
 	return p, nil
 }
 
@@ -120,24 +230,200 @@ func (p PortfolioModel) currentListLen() int {
 		}
 	case PortfolioGrants:
 		return len(p.grantList)
+	case PortfolioVestSchedule:
+		return len(p.vestEvents)
 	}
 	return 0
 }
 
+// --- Forms ---
+
+func (p *PortfolioModel) newBuyForm() FormModel {
+	ps := p.portfolio
+	priceSvc := p.prices
+	return NewForm("Buy Stock", []FormField{
+		{Label: "Ticker", Placeholder: "e.g. AAPL"},
+		{Label: "Shares", Placeholder: "e.g. 10"},
+		{Label: "Price/Share", Placeholder: "e.g. 185.50"},
+		{Label: "Date", Value: time.Now().Format("2006-01-02")},
+		{Label: "Note", Placeholder: "optional"},
+	}, func(fields []FormField) (tea.Cmd, string) {
+		ticker := strings.ToUpper(strings.TrimSpace(fields[0].Value))
+		sharesStr := strings.TrimSpace(fields[1].Value)
+		priceStr := strings.TrimSpace(fields[2].Value)
+		date := strings.TrimSpace(fields[3].Value)
+		note := strings.TrimSpace(fields[4].Value)
+
+		if ticker == "" {
+			return nil, "Ticker is required"
+		}
+		if sharesStr == "" {
+			return nil, "Shares is required"
+		}
+		if priceStr == "" {
+			return nil, "Price per share is required"
+		}
+		shares, err := strconv.ParseFloat(sharesStr, 64)
+		if err != nil || shares <= 0 {
+			return nil, "Invalid shares — enter a number like 10"
+		}
+		price, err := strconv.ParseFloat(priceStr, 64)
+		if err != nil || price <= 0 {
+			return nil, "Invalid price — enter a number like 185.50"
+		}
+		if date == "" {
+			date = time.Now().Format("2006-01-02")
+		}
+
+		priceCents := int64(math.Round(price * 100))
+		ps.BuyLot(ticker, shares, priceCents, date, note)
+		// refresh price cache for new ticker
+		priceSvc.FetchPrice(ticker)
+
+		return func() tea.Msg {
+			summary, _ := ps.GetPortfolio()
+			return portfolioDataMsg{summary, nil}
+		}, ""
+	})
+}
+
+func (p *PortfolioModel) newGrantForm() FormModel {
+	gs := p.grants
+	return NewForm("Add Grant", []FormField{
+		{Label: "Ticker", Placeholder: "e.g. ACME"},
+		{Label: "Type", Value: "rsu", Options: []string{"iso", "rsu"}},
+		{Label: "Total Shares", Placeholder: "e.g. 10000"},
+		{Label: "Grant Date", Placeholder: "YYYY-MM-DD"},
+		{Label: "Strike (ISO)", Placeholder: "e.g. 12.50 (ISOs only)"},
+		{Label: "Cliff Months", Value: "12"},
+		{Label: "Vest Months", Value: "48"},
+		{Label: "Interval", Value: "monthly", Options: []string{"monthly", "quarterly"}},
+	}, func(fields []FormField) (tea.Cmd, string) {
+		ticker := strings.ToUpper(strings.TrimSpace(fields[0].Value))
+		grantType := fields[1].Value
+		sharesStr := strings.TrimSpace(fields[2].Value)
+		grantDate := strings.TrimSpace(fields[3].Value)
+		strikeStr := strings.TrimSpace(fields[4].Value)
+		cliffStr := strings.TrimSpace(fields[5].Value)
+		vestStr := strings.TrimSpace(fields[6].Value)
+		interval := fields[7].Value
+
+		if ticker == "" {
+			return nil, "Ticker is required"
+		}
+		if sharesStr == "" {
+			return nil, "Total shares is required"
+		}
+		if grantDate == "" {
+			return nil, "Grant date is required"
+		}
+		shares, err := strconv.ParseFloat(sharesStr, 64)
+		if err != nil || shares <= 0 {
+			return nil, "Invalid shares"
+		}
+		cliff, _ := strconv.Atoi(cliffStr)
+		vest, _ := strconv.Atoi(vestStr)
+		if cliff <= 0 {
+			cliff = 12
+		}
+		if vest <= 0 {
+			vest = 48
+		}
+
+		grant := model.EquityGrant{
+			Ticker:          ticker,
+			GrantType:       grantType,
+			TotalShares:     shares,
+			GrantDate:       grantDate,
+			CliffMonths:     cliff,
+			VestingMonths:   vest,
+			VestingInterval: interval,
+		}
+
+		if grantType == "iso" {
+			if strikeStr == "" {
+				return nil, "Strike price is required for ISOs"
+			}
+			strike, err := strconv.ParseFloat(strikeStr, 64)
+			if err != nil || strike <= 0 {
+				return nil, "Invalid strike price"
+			}
+			strikeCents := int64(math.Round(strike * 100))
+			grant.StrikePrice = &strikeCents
+		}
+
+		_, err = gs.CreateGrant(grant)
+		if err != nil {
+			return nil, fmt.Sprintf("Error: %v", err)
+		}
+
+		return func() tea.Msg {
+			summary, _ := gs.ListGrants()
+			return portfolioDataMsg{nil, summary}
+		}, ""
+	})
+}
+
+type vestScheduleRefreshMsg struct {
+	events []model.VestEvent
+}
+
+func (p *PortfolioModel) newExerciseForm(event model.VestEvent) FormModel {
+	gs := p.grants
+	grantID := p.vestGrantID
+	return NewForm(fmt.Sprintf("Exercise ISO — Event #%d (%.2f shares)", event.ID, event.Shares), []FormField{
+		{Label: "FMV/Share", Placeholder: "e.g. 45.00 (current fair market value)"},
+	}, func(fields []FormField) (tea.Cmd, string) {
+		fmvStr := strings.TrimSpace(fields[0].Value)
+		if fmvStr == "" {
+			return nil, "FMV per share is required"
+		}
+		fmv, err := strconv.ParseFloat(fmvStr, 64)
+		if err != nil || fmv <= 0 {
+			return nil, "Invalid FMV — enter a number like 45.00"
+		}
+		fmvCents := int64(math.Round(fmv * 100))
+		_, err = gs.ExerciseISO(event.ID, fmvCents)
+		if err != nil {
+			return nil, fmt.Sprintf("Error: %v", err)
+		}
+		return func() tea.Msg {
+			events, _ := gs.GetVestSchedule(grantID)
+			return vestScheduleRefreshMsg{events}
+		}, ""
+	})
+}
+
+// --- Views ---
+
 func (p PortfolioModel) View() string {
+	if p.form.Active() {
+		return p.form.View()
+	}
+
 	var sb strings.Builder
 
 	// Sub-view tabs
-	posLabel := "Positions"
-	grantLabel := "Grants"
-	if p.subView == PortfolioPositions {
-		posLabel = activeTabStyle.Render(posLabel)
-		grantLabel = inactiveTabStyle.Render(grantLabel)
-	} else {
-		posLabel = inactiveTabStyle.Render(posLabel)
-		grantLabel = activeTabStyle.Render(grantLabel)
+	tabs := []struct {
+		name string
+		view PortfolioSubView
+	}{
+		{"Positions", PortfolioPositions},
+		{"Grants", PortfolioGrants},
 	}
-	sb.WriteString(posLabel + " " + grantLabel)
+	if p.subView == PortfolioVestSchedule {
+		tabs = append(tabs, struct {
+			name string
+			view PortfolioSubView
+		}{"Vest Schedule", PortfolioVestSchedule})
+	}
+	for _, t := range tabs {
+		if t.view == p.subView {
+			sb.WriteString(activeTabStyle.Render(t.name) + " ")
+		} else {
+			sb.WriteString(inactiveTabStyle.Render(t.name) + " ")
+		}
+	}
 
 	if p.refreshing {
 		sb.WriteString("  " + lipgloss.NewStyle().Foreground(warning).Render("refreshing prices..."))
@@ -149,9 +435,14 @@ func (p PortfolioModel) View() string {
 		sb.WriteString(p.viewPositions())
 	case PortfolioGrants:
 		sb.WriteString(p.viewGrants())
+	case PortfolioVestSchedule:
+		sb.WriteString(p.viewVestSchedule())
 	}
 
-	sb.WriteString("\n  j/k:navigate  g:grants  p:positions  r:refresh prices  G:bottom")
+	if p.statusMsg != "" {
+		sb.WriteString("\n  " + lipgloss.NewStyle().Foreground(special).Render(p.statusMsg))
+	}
+
 	return sb.String()
 }
 
@@ -159,7 +450,7 @@ func (p PortfolioModel) viewPositions() string {
 	var sb strings.Builder
 
 	if p.summary == nil || len(p.summary.Positions) == 0 {
-		sb.WriteString("  No positions. Buy stocks with: budget equity buy --ticker AAPL --shares 10 --price 185.50\n")
+		sb.WriteString("  No positions. Press 'a' to buy stock.\n")
 		return sb.String()
 	}
 
@@ -219,8 +510,7 @@ func (p PortfolioModel) viewGrants() string {
 	sb.WriteString(headerStyle.Render("ISO & RSU Grants") + "\n\n")
 
 	if len(p.grantList) == 0 {
-		sb.WriteString("  No grants. Add one with:\n")
-		sb.WriteString("  budget equity grant add --ticker ACME --type iso --shares 10000 --strike 12.50 --date 2024-06-01\n")
+		sb.WriteString("  No grants. Press 'a' to add an ISO or RSU grant.\n")
 		return sb.String()
 	}
 
@@ -269,6 +559,51 @@ func (p PortfolioModel) viewGrants() string {
 		}
 
 		sb.WriteString(fmt.Sprintf("    %s  %.1f%%  %s\n", bar, pct, vestInfo))
+	}
+
+	return sb.String()
+}
+
+func (p PortfolioModel) viewVestSchedule() string {
+	var sb strings.Builder
+	sb.WriteString(headerStyle.Render(fmt.Sprintf("Vest Schedule — Grant #%d", p.vestGrantID)) + "\n\n")
+
+	if len(p.vestEvents) == 0 {
+		sb.WriteString("  No vest events.\n")
+		return sb.String()
+	}
+
+	hdr := fmt.Sprintf("  %-4s  %-12s  %12s  %12s  %-10s",
+		"#", "DATE", "SHARES", "CUM", "STATUS")
+	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(muted).Render(hdr) + "\n")
+
+	var cumulative float64
+	for i, e := range p.vestEvents {
+		cumulative += e.Shares
+
+		statusStyle := lipgloss.NewStyle().Foreground(muted)
+		switch e.Status {
+		case "vested":
+			statusStyle = greenStyle
+		case "exercised":
+			statusStyle = lipgloss.NewStyle().Foreground(highlight)
+		case "pending":
+			statusStyle = yellowStyle
+		}
+
+		fmvStr := ""
+		if e.FMVPerShare != nil {
+			fmvStr = fmt.Sprintf("  FMV $%.2f", float64(*e.FMVPerShare)/100)
+		}
+
+		line := fmt.Sprintf("  %-4d  %-12s  %12.2f  %12.0f  %s%s",
+			e.ID, e.Date, e.Shares, cumulative,
+			statusStyle.Render(e.Status), fmvStr)
+
+		if i == p.cursor {
+			line = selectedRowStyle.Render(line)
+		}
+		sb.WriteString(line + "\n")
 	}
 
 	return sb.String()

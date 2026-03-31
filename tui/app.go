@@ -82,6 +82,8 @@ func (a *App) childInputActive() bool {
 		return a.budgets.InputActive()
 	case TabRecurring:
 		return a.recurring.InputActive()
+	case TabPortfolio:
+		return a.portfolio.InputActive()
 	}
 	return false
 }
@@ -115,6 +117,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.budgets, cmd = a.budgets.Update(msg)
 			case TabRecurring:
 				a.recurring, cmd = a.recurring.Update(msg)
+			case TabPortfolio:
+				a.portfolio, cmd = a.portfolio.Update(msg)
 			}
 			return a, cmd
 		}
@@ -288,7 +292,18 @@ func (a *App) helpText() string {
 	case TabReports:
 		return "h/l:switch reports  " + common
 	case TabPortfolio:
-		return "j/k:navigate  g:grants  p:positions  r:refresh  G:bottom  " + common
+		if a.portfolio.InputActive() {
+			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+		}
+		switch a.portfolio.subView {
+		case PortfolioPositions:
+			return "j/k:navigate  a:buy  d:delete  g:grants  r:refresh  " + common
+		case PortfolioGrants:
+			return "j/k:navigate  a:add grant  d:delete  v:vest  s:schedule  p:positions  " + common
+		case PortfolioVestSchedule:
+			return "j/k:navigate  v:exercise(ISO)  esc:back  p:positions  g:grants  " + common
+		}
+		return "j/k:navigate  " + common
 	}
 	return common
 }
