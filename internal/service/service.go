@@ -250,6 +250,9 @@ func (s *Service) ListTransactions(f model.TxFilter) ([]model.Transaction, error
 		q += " AND t.category_id = ?"
 		args = append(args, *f.CategoryID)
 	}
+	if f.Uncategorized {
+		q += " AND t.category_id IS NULL"
+	}
 	if f.Payee != "" {
 		q += " AND LOWER(t.payee) LIKE ?"
 		args = append(args, "%"+strings.ToLower(f.Payee)+"%")

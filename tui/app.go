@@ -276,7 +276,7 @@ func (a *App) helpText() string {
 		if a.transactions.InputActive() {
 			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
 		}
-		return "j/k:navigate  a:add  c:categorize  t:type  /:search  d:delete  g/G:top/bottom  " + common
+		return "j/k:navigate  a:add  c:categorize  t:type  u:uncategorized  /:search  d:delete  " + common
 	case TabBudgets:
 		if a.budgets.InputActive() {
 			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"

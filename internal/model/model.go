@@ -231,14 +231,15 @@ type Contribution401k struct {
 }
 
 type TxFilter struct {
-	Month     string // YYYY-MM
-	From      string // YYYY-MM-DD
-	To        string // YYYY-MM-DD
-	AccountID *int64
-	CategoryID *int64
-	Payee     string
-	Type      TxType
-	Search    string
-	Limit     int
-	Offset    int
+	Month         string // YYYY-MM
+	From          string // YYYY-MM-DD
+	To            string // YYYY-MM-DD
+	AccountID     *int64
+	CategoryID    *int64
+	Payee         string
+	Type          TxType
+	Search        string
+	Uncategorized bool
+	Limit         int
+	Offset        int
 }

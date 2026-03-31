@@ -171,6 +171,10 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 			t.search = ""
 		case "a":
 			t.form = t.newAddForm()
+		case "u":
+			t.filter.Uncategorized = !t.filter.Uncategorized
+			t.cursor = 0
+			return t, t.Init()
 		case "c":
 			if len(t.txs) > 0 && t.cursor < len(t.txs) {
 				t.openCategoryPicker()
@@ -291,6 +295,9 @@ func (t TransactionsModel) View() string {
 		b.WriteString(headerStyle.Render("Search: ") + t.search + "█\n\n")
 	} else {
 		title := "Transactions"
+		if t.filter.Uncategorized {
+			title += " — Uncategorized"
+		}
 		if t.filter.Search != "" {
 			title += fmt.Sprintf(" (search: %q)", t.filter.Search)
 		}
@@ -347,7 +354,11 @@ func (t TransactionsModel) View() string {
 		b.WriteString(line + "\n")
 	}
 
-	b.WriteString(fmt.Sprintf("\n  %d transactions | j/k:navigate  c:categorize  t:type  /:search  d:delete  g/G:top/bottom", len(t.txs)))
+	uncatLabel := "u:uncategorized"
+	if t.filter.Uncategorized {
+		uncatLabel = "u:show all"
+	}
+	b.WriteString(fmt.Sprintf("\n  %d transactions | j/k:navigate  c:categorize  t:type  %s  /:search  d:delete  g/G:top/bottom", len(t.txs), uncatLabel))
 	return b.String()
 }
 
