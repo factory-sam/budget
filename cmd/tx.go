@@ -68,6 +68,14 @@ var txAddCmd = &cobra.Command{
 			txType = "expense"
 		}
 
+		// Auto-set transfer type for credit card payments
+		if categoryID != nil {
+			ccCat, _ := service.FindCategoryByName("Credit Card Payment")
+			if ccCat != nil && *categoryID == ccCat.ID {
+				txType = "transfer"
+			}
+		}
+
 		cents := int64(math.Round(amount * 100))
 		tx := model.Transaction{
 			AccountID:  acc.ID,

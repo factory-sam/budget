@@ -103,6 +103,14 @@ func (c *CSVImporter) Import(path string, accountID int64) (int, error) {
 
 		catID := c.svc.AutoCategorize(payee)
 
+		// Credit card payments are transfers, not expenses
+		if catID != nil {
+			cat, _ := c.svc.FindCategoryByName("Credit Card Payment")
+			if cat != nil && *catID == cat.ID {
+				txType = model.TxTransfer
+			}
+		}
+
 		tx := model.Transaction{
 			AccountID:  accountID,
 			CategoryID: catID,

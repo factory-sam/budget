@@ -32,10 +32,10 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
-	// incremental migrations for existing databases
 	for _, m := range migrations {
 		db.Exec(m)
 	}
+	migrateCategories(db)
 	return nil
 }
 
@@ -45,6 +45,29 @@ var migrations = []string{
 	"ALTER TABLE equity_grants ADD COLUMN fmv_at_grant INTEGER",
 	"ALTER TABLE equity_grants ADD COLUMN vesting_start_date TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE networth_snapshots ADD COLUMN equity_value INTEGER NOT NULL DEFAULT 0",
+}
+
+func migrateCategories(db *sql.DB) {
+	// Add "Dividend Income" to Income group
+	var incomeGroupID int64
+	err := db.QueryRow("SELECT id FROM category_groups WHERE name = 'Income'").Scan(&incomeGroupID)
+	if err == nil {
+		var exists int
+		db.QueryRow("SELECT COUNT(*) FROM categories WHERE group_id = ? AND name = 'Dividend Income'", incomeGroupID).Scan(&exists)
+		if exists == 0 {
+			db.Exec("INSERT INTO categories (group_id, name, sort_order) VALUES (?, 'Dividend Income', 3)", incomeGroupID)
+		}
+	}
+	// Add "Credit Card Payment" to Transfers group
+	var transferGroupID int64
+	err = db.QueryRow("SELECT id FROM category_groups WHERE name = 'Transfers'").Scan(&transferGroupID)
+	if err == nil {
+		var exists int
+		db.QueryRow("SELECT COUNT(*) FROM categories WHERE group_id = ? AND name = 'Credit Card Payment'", transferGroupID).Scan(&exists)
+		if exists == 0 {
+			db.Exec("INSERT INTO categories (group_id, name, sort_order) VALUES (?, 'Credit Card Payment', 1)", transferGroupID)
+		}
+	}
 }
 
 const schema = `
@@ -214,8 +237,8 @@ func SeedCategories(db *sql.DB) error {
 		"Entertainment":  {"Streaming", "Games", "Movies", "Music", "Events"},
 		"Health":         {"Doctor", "Pharmacy", "Gym", "Dental", "Vision"},
 		"Personal":       {"Haircut", "Education", "Subscriptions"},
-		"Income":         {"Salary", "Freelance", "Interest", "Refunds", "Other Income"},
-		"Transfers":      {"Transfer"},
+		"Income":         {"Salary", "Freelance", "Interest", "Dividend Income", "Refunds", "Other Income"},
+		"Transfers":      {"Transfer", "Credit Card Payment"},
 		"Uncategorized":  {"Uncategorized"},
 	}
 

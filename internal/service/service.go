@@ -213,7 +213,7 @@ func (s *Service) CreateTransaction(tx model.Transaction) (*model.Transaction, e
 
 	// update account balance
 	delta := tx.Amount
-	if tx.Type == model.TxExpense {
+	if tx.Type == model.TxExpense || tx.Type == model.TxTransfer {
 		delta = -delta
 	}
 	s.UpdateAccountBalance(tx.AccountID, delta)
@@ -304,8 +304,11 @@ func (s *Service) DeleteTransaction(id int64) error {
 	}
 	// reverse balance change
 	delta := amount
-	if model.TxType(txType) == model.TxIncome {
+	switch model.TxType(txType) {
+	case model.TxIncome:
 		delta = -delta
+	case model.TxExpense, model.TxTransfer:
+		// was deducted, so add back
 	}
 	return s.UpdateAccountBalance(accountID, delta)
 }
@@ -332,18 +335,16 @@ func (s *Service) UpdateTransactionType(txID int64, newType model.TxType) error 
 	switch model.TxType(oldType) {
 	case model.TxIncome:
 		s.UpdateAccountBalance(accountID, -amount)
-	case model.TxExpense:
+	case model.TxExpense, model.TxTransfer:
 		s.UpdateAccountBalance(accountID, amount)
-	// transfer: no balance effect
 	}
 
 	// Apply new balance effect
 	switch newType {
 	case model.TxIncome:
 		s.UpdateAccountBalance(accountID, amount)
-	case model.TxExpense:
+	case model.TxExpense, model.TxTransfer:
 		s.UpdateAccountBalance(accountID, -amount)
-	// transfer: no balance effect
 	}
 
 	_, err = s.db.Exec("UPDATE transactions SET type = ? WHERE id = ?", newType, txID)
@@ -519,6 +520,27 @@ func (s *Service) AutoCategorize(payee string) *int64 {
 	for _, r := range rules {
 		if strings.Contains(lower, r.Pattern) {
 			return &r.CategoryID
+		}
+	}
+	// built-in pattern matching
+	builtins := []struct {
+		patterns []string
+		catName  string
+	}{
+		{[]string{"dividend"}, "Dividend Income"},
+		{[]string{"american express", "amex", "applecard", "chase card", "citi card", "capital one"}, "Credit Card Payment"},
+		{[]string{"payroll", "direct dep"}, "Salary"},
+		{[]string{"interest earned", "bank interest"}, "Interest"},
+		{[]string{"refund", "rebate", "rewards"}, "Refunds"},
+	}
+	for _, b := range builtins {
+		for _, p := range b.patterns {
+			if strings.Contains(lower, p) {
+				cat, err := s.FindCategoryByName(b.catName)
+				if err == nil {
+					return &cat.ID
+				}
+			}
 		}
 	}
 	return nil
