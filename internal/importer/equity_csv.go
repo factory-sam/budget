@@ -221,7 +221,12 @@ func (e *EquityCSVImporter) Import(path string, accountID *int64) (*EquityImport
 				}
 			}
 			if txAccountID > 0 {
-				e.svc.CreateTransaction(transactionForDividend(txAccountID, catID, cents, date, symbol, desc))
+				tx := transactionForDividend(txAccountID, catID, cents, date, symbol, desc)
+				// Insert directly without updating account balance — dividend income
+				// from brokerage CSVs is already reflected in portfolio lot values
+				e.svc.DB().Exec(
+					"INSERT INTO transactions (account_id, category_id, amount, date, payee, note, type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+					tx.AccountID, tx.CategoryID, tx.Amount, tx.Date, tx.Payee, tx.Note, tx.Type)
 			}
 			result.Dividends++
 
