@@ -3,6 +3,7 @@ package service
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -671,6 +672,9 @@ func (s *Service) CashFlowReport(from, to string) ([]CashFlowReport, error) {
 		v.Net = v.Income - v.Expenses
 		results = append(results, *v)
 	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Month < results[j].Month
+	})
 	return results, nil
 }
 

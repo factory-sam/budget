@@ -135,19 +135,80 @@ func (r ReportsModel) viewCashFlow() string {
 		return sb.String()
 	}
 
-	hdr := fmt.Sprintf("  %-10s  %12s  %12s  %12s", "MONTH", "INCOME", "EXPENSES", "NET")
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(muted).Render(hdr) + "\n")
+	// Find max for scaling bars
+	var maxVal int64
+	for _, cf := range r.cashflow {
+		if cf.Income > maxVal {
+			maxVal = cf.Income
+		}
+		if cf.Expenses > maxVal {
+			maxVal = cf.Expenses
+		}
+	}
+
+	barWidth := r.width - 55
+	if barWidth < 15 {
+		barWidth = 15
+	}
+	if barWidth > 40 {
+		barWidth = 40
+	}
+
+	// Totals
+	var totalInc, totalExp int64
+	for _, cf := range r.cashflow {
+		totalInc += cf.Income
+		totalExp += cf.Expenses
+	}
+	totalNet := totalInc - totalExp
+	totNetStyle := greenStyle
+	if totalNet < 0 {
+		totNetStyle = redStyle
+	}
+	sb.WriteString(fmt.Sprintf("  Total Income: %s  Expenses: %s  Net: %s\n\n",
+		greenStyle.Render(fmt.Sprintf("$%.2f", float64(totalInc)/100)),
+		redStyle.Render(fmt.Sprintf("$%.2f", float64(totalExp)/100)),
+		totNetStyle.Render(fmt.Sprintf("$%.2f", float64(totalNet)/100))))
 
 	for _, cf := range r.cashflow {
+		// Month header with net
 		netStyle := greenStyle
+		netSign := "+"
 		if cf.Net < 0 {
 			netStyle = redStyle
+			netSign = ""
 		}
-		sb.WriteString(fmt.Sprintf("  %-10s  %s  %s  %s\n",
-			cf.Month,
-			greenStyle.Render(fmt.Sprintf("$%10.2f", float64(cf.Income)/100)),
-			redStyle.Render(fmt.Sprintf("$%10.2f", float64(cf.Expenses)/100)),
-			netStyle.Render(fmt.Sprintf("$%10.2f", float64(cf.Net)/100))))
+		sb.WriteString(fmt.Sprintf("  %s  net %s\n",
+			lipgloss.NewStyle().Bold(true).Render(cf.Month),
+			netStyle.Render(fmt.Sprintf("%s$%.2f", netSign, float64(cf.Net)/100))))
+
+		// Income bar
+		incBar := 0
+		if maxVal > 0 {
+			incBar = int(float64(cf.Income) / float64(maxVal) * float64(barWidth))
+		}
+		if incBar < 1 && cf.Income > 0 {
+			incBar = 1
+		}
+		sb.WriteString(fmt.Sprintf("    %s %s  %s\n",
+			lipgloss.NewStyle().Foreground(muted).Render("IN "),
+			greenStyle.Render(strings.Repeat("█", incBar)+strings.Repeat("░", barWidth-incBar)),
+			greenStyle.Render(fmt.Sprintf("$%.2f", float64(cf.Income)/100))))
+
+		// Expense bar
+		expBar := 0
+		if maxVal > 0 {
+			expBar = int(float64(cf.Expenses) / float64(maxVal) * float64(barWidth))
+		}
+		if expBar < 1 && cf.Expenses > 0 {
+			expBar = 1
+		}
+		sb.WriteString(fmt.Sprintf("    %s %s  %s\n",
+			lipgloss.NewStyle().Foreground(muted).Render("OUT"),
+			redStyle.Render(strings.Repeat("█", expBar)+strings.Repeat("░", barWidth-expBar)),
+			redStyle.Render(fmt.Sprintf("$%.2f", float64(cf.Expenses)/100))))
+
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

@@ -110,13 +110,47 @@ var reportCashflowCmd = &cobra.Command{
 			return nil
 		}
 
+		// Find max for scaling bars
+		var maxVal int64
+		for _, r := range results {
+			if r.Income > maxVal {
+				maxVal = r.Income
+			}
+			if r.Expenses > maxVal {
+				maxVal = r.Expenses
+			}
+		}
+
+		barWidth := 30
+		fmt.Printf("Cash Flow — %s to %s\n\n", from[:7], to[:7])
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "MONTH\tINCOME\tEXPENSES\tNET")
 		for _, r := range results {
-			fmt.Fprintf(w, "%s\t$%.2f\t$%.2f\t$%.2f\n",
-				r.Month, float64(r.Income)/100, float64(r.Expenses)/100, float64(r.Net)/100)
+			netSign := "+"
+			if r.Net < 0 {
+				netSign = ""
+			}
+			fmt.Fprintf(w, "%s\t$%10.2f\t$%10.2f\t%s$%.2f\n",
+				r.Month, float64(r.Income)/100, float64(r.Expenses)/100,
+				netSign, float64(r.Net)/100)
 		}
-		return w.Flush()
+		w.Flush()
+
+		// Bar chart
+		fmt.Println()
+		for _, r := range results {
+			incBar := 0
+			expBar := 0
+			if maxVal > 0 {
+				incBar = int(float64(r.Income) / float64(maxVal) * float64(barWidth))
+				expBar = int(float64(r.Expenses) / float64(maxVal) * float64(barWidth))
+			}
+			incPad := strings.Repeat("░", barWidth-incBar)
+			expPad := strings.Repeat("░", barWidth-expBar)
+			fmt.Printf("  %s  IN  %s%s  $%.0f\n", r.Month, strings.Repeat("█", incBar), incPad, float64(r.Income)/100)
+			fmt.Printf("            OUT %s%s  $%.0f\n", strings.Repeat("█", expBar), expPad, float64(r.Expenses)/100)
+		}
+		return nil
 	},
 }
 
