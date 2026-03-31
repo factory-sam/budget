@@ -44,6 +44,7 @@ var migrations = []string{
 	"ALTER TABLE equity_lots ADD COLUMN account_id INTEGER REFERENCES accounts(id)",
 	"ALTER TABLE equity_grants ADD COLUMN fmv_at_grant INTEGER",
 	"ALTER TABLE equity_grants ADD COLUMN vesting_start_date TEXT NOT NULL DEFAULT ''",
+	"ALTER TABLE networth_snapshots ADD COLUMN equity_value INTEGER NOT NULL DEFAULT 0",
 }
 
 const schema = `
