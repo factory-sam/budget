@@ -235,10 +235,12 @@ func (t TransactionsModel) View() string {
 			sign = "+"
 			style = greenStyle
 		}
-		amountStr := style.Render(fmt.Sprintf("%s$%.2f", sign, float64(tx.Amount)/100))
+		rawAmount := fmt.Sprintf("%s$%.2f", sign, float64(tx.Amount)/100)
+		paddedAmount := fmt.Sprintf("%10s", rawAmount)
+		amountStr := style.Render(paddedAmount)
 
-		line := fmt.Sprintf("  %-10s  %-25s  %10s  %-8s  %-15s  %-15s",
-			tx.Date, truncStr(tx.Payee, 25), amountStr, tx.Type,
+		line := fmt.Sprintf("  %-10s  %-25s  %s  %-8s  %-15s  %-15s",
+			tx.Date, truncStr(tx.Payee, 25), amountStr, string(tx.Type),
 			truncStr(tx.CategoryName, 15), truncStr(tx.AccountName, 15))
 
 		if i == t.cursor {
