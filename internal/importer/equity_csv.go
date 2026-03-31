@@ -63,10 +63,40 @@ func (e *EquityCSVImporter) Import(path string, accountID *int64) (*EquityImport
 		return nil, fmt.Errorf("could not detect required columns (need Trade Date and Symbol)")
 	}
 
+	// Sort data rows chronologically (CSVs are often newest-first)
+	dataRows := records[headerIdx+1:]
+	if len(dataRows) > 1 && cols.date >= 0 {
+		// Find first and last rows with actual dates (skip blank rows)
+		var firstDate, lastDate string
+		for _, row := range dataRows {
+			if cols.date < len(row) {
+				d := normalizeDate(strings.TrimSpace(row[cols.date]))
+				if isValidDate(d) {
+					firstDate = d
+					break
+				}
+			}
+		}
+		for i := len(dataRows) - 1; i >= 0; i-- {
+			if cols.date < len(dataRows[i]) {
+				d := normalizeDate(strings.TrimSpace(dataRows[i][cols.date]))
+				if isValidDate(d) {
+					lastDate = d
+					break
+				}
+			}
+		}
+		if firstDate > lastDate {
+			for left, right := 0, len(dataRows)-1; left < right; left, right = left+1, right-1 {
+				dataRows[left], dataRows[right] = dataRows[right], dataRows[left]
+			}
+		}
+	}
+
 	result := &EquityImportResult{}
 
-	for i := headerIdx + 1; i < len(records); i++ {
-		row := records[i]
+	for i := 0; i < len(dataRows); i++ {
+		row := dataRows[i]
 		if len(row) <= cols.date {
 			continue
 		}
@@ -118,6 +148,27 @@ func (e *EquityCSVImporter) Import(path string, accountID *int64) (*EquityImport
 			}
 			priceCents := int64(math.Round(price * 100))
 			note := truncateDesc(desc)
+			_, err := e.portfolio.BuyLot(accountID, symbol, qty, priceCents, date, note)
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("row %d: %v", i+1, err))
+				continue
+			}
+			result.Purchases++
+
+		case "transfer_in":
+			if symbol == "" || qtyStr == "" {
+				result.Skipped++
+				continue
+			}
+			qty := parseNumber(qtyStr)
+			if qty <= 0 {
+				result.Skipped++
+				continue
+			}
+			// Use the price if available, otherwise cost basis = 0 (unknown)
+			price := parseNumber(priceStr)
+			priceCents := int64(math.Round(price * 100))
+			note := "Transfer in"
 			_, err := e.portfolio.BuyLot(accountID, symbol, qty, priceCents, date, note)
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("row %d: %v", i+1, err))
