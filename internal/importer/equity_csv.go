@@ -230,6 +230,59 @@ func (e *EquityCSVImporter) Import(path string, accountID *int64) (*EquityImport
 			}
 			result.Dividends++
 
+		case "deposit":
+			amount := parseNumber(amountStr)
+			if amount == 0 {
+				result.Skipped++
+				continue
+			}
+			cents := int64(math.Round(math.Abs(amount) * 100))
+			var txAccountID int64
+			if accountID != nil {
+				txAccountID = *accountID
+			}
+			if txAccountID > 0 {
+				txType := model.TxIncome
+				if amount < 0 {
+					txType = model.TxExpense
+				}
+				tx := model.Transaction{
+					AccountID: txAccountID,
+					Amount:    cents,
+					Date:      date,
+					Payee:     truncateDesc(desc),
+					Type:      txType,
+				}
+				tx.CategoryID = e.svc.AutoCategorize(desc)
+				e.svc.CreateTransaction(tx)
+			}
+			result.Dividends++
+
+		case "interest":
+			amount := parseNumber(amountStr)
+			if amount == 0 {
+				result.Skipped++
+				continue
+			}
+			cents := int64(math.Round(math.Abs(amount) * 100))
+			var txAccountID int64
+			if accountID != nil {
+				txAccountID = *accountID
+			}
+			if txAccountID > 0 {
+				catID := e.svc.AutoCategorize("Bank Interest")
+				tx := model.Transaction{
+					AccountID:  txAccountID,
+					CategoryID: catID,
+					Amount:     cents,
+					Date:       date,
+					Payee:      truncateDesc(desc),
+					Type:       model.TxIncome,
+				}
+				e.svc.CreateTransaction(tx)
+			}
+			result.Dividends++
+
 		default:
 			result.Skipped++
 		}

@@ -377,13 +377,18 @@ func (s *Service) SetBudget(categoryID int64, year, month int, amountCents int64
 
 func (s *Service) GetBudgetStatus(year, month int) ([]model.BudgetStatus, error) {
 	monthStr := fmt.Sprintf("%04d-%02d", year, month)
+	// Show all expense categories (from non-income/transfer groups) with their
+	// budget limit (if set) and actual spending for the month.
 	rows, err := s.db.Query(`
-		SELECT b.id, b.category_id, c.name, b.year, b.month, b.amount_limit,
-			COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.category_id = b.category_id AND t.date LIKE ? AND t.type = 'expense'), 0)
-		FROM budgets b
-		JOIN categories c ON b.category_id = c.id
-		WHERE b.year = ? AND b.month = ?
-		ORDER BY c.name`, monthStr+"%", year, month)
+		SELECT c.id, c.name, 
+			COALESCE(b.id, 0),
+			COALESCE(b.amount_limit, 0),
+			COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.category_id = c.id AND t.date LIKE ? AND t.type = 'expense'), 0)
+		FROM categories c
+		JOIN category_groups g ON c.group_id = g.id
+		LEFT JOIN budgets b ON b.category_id = c.id AND b.year = ? AND b.month = ?
+		WHERE g.name NOT IN ('Income', 'Transfers', 'Uncategorized')
+		ORDER BY g.sort_order, c.sort_order`, monthStr+"%", year, month)
 	if err != nil {
 		return nil, err
 	}
@@ -391,9 +396,11 @@ func (s *Service) GetBudgetStatus(year, month int) ([]model.BudgetStatus, error)
 	var statuses []model.BudgetStatus
 	for rows.Next() {
 		var bs model.BudgetStatus
-		if err := rows.Scan(&bs.ID, &bs.CategoryID, &bs.CategoryName, &bs.Year, &bs.Month, &bs.AmountLimit, &bs.Spent); err != nil {
+		if err := rows.Scan(&bs.CategoryID, &bs.CategoryName, &bs.ID, &bs.AmountLimit, &bs.Spent); err != nil {
 			return nil, err
 		}
+		bs.Year = year
+		bs.Month = month
 		bs.Remaining = bs.AmountLimit - bs.Spent
 		if bs.AmountLimit > 0 {
 			bs.Percent = float64(bs.Spent) / float64(bs.AmountLimit) * 100
