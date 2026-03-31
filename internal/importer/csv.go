@@ -41,25 +41,38 @@ func (c *CSVImporter) Import(path string, accountID int64) (int, error) {
 	}
 
 	reader := csv.NewReader(f)
-	header, err := reader.Read()
-	if err != nil {
-		return 0, fmt.Errorf("read header: %w", err)
-	}
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
 
-	colMap := detectColumns(header)
-	if colMap.date < 0 || colMap.amount < 0 {
-		return 0, fmt.Errorf("could not detect date and amount columns in CSV header: %v", header)
-	}
-
-	count := 0
+	// Read all records and find the header row
+	var allRecords [][]string
 	for {
-		record, err := reader.Read()
+		rec, err := reader.Read()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			continue
 		}
+		allRecords = append(allRecords, rec)
+	}
+
+	headerIdx := -1
+	var colMap columnMap
+	for i, rec := range allRecords {
+		cm := detectColumns(rec)
+		if cm.date >= 0 && cm.amount >= 0 {
+			colMap = cm
+			headerIdx = i
+			break
+		}
+	}
+	if headerIdx < 0 {
+		return 0, fmt.Errorf("could not detect date and amount columns in CSV")
+	}
+
+	count := 0
+	for _, record := range allRecords[headerIdx+1:] {
 
 		date := ""
 		if colMap.date >= 0 && colMap.date < len(record) {
@@ -71,6 +84,9 @@ func (c *CSVImporter) Import(path string, accountID int64) (int, error) {
 			amountStr = record[colMap.amount]
 		}
 		amount, txType := parseAmount(amountStr)
+		if amount == 0 {
+			continue
+		}
 
 		payee := ""
 		if colMap.payee >= 0 && colMap.payee < len(record) {
