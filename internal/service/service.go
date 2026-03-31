@@ -509,7 +509,8 @@ func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
 	if GetEquityValue != nil {
 		equityValue, _ = GetEquityValue()
 	}
-	nw := assets - liabilities + equityValue
+	assets += equityValue
+	nw := assets - liabilities
 	s.db.Exec(`INSERT OR REPLACE INTO networth_snapshots (date, total_assets, total_liabilities, equity_value, net_worth) VALUES (?, ?, ?, ?, ?)`,
 		today, assets, liabilities, equityValue, nw)
 	return &model.NetWorthSnapshot{Date: today, TotalAssets: assets, TotalLiabilities: liabilities, EquityValue: equityValue, NetWorth: nw}, nil
