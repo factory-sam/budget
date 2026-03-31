@@ -168,17 +168,19 @@ type EquityLot struct {
 }
 
 type EquityGrant struct {
-	ID              int64   `json:"id"`
-	Ticker          string  `json:"ticker"`
-	GrantType       string  `json:"grant_type"` // iso, rsu
-	TotalShares     float64 `json:"total_shares"`
-	GrantDate       string  `json:"grant_date"`
-	StrikePrice     *int64  `json:"strike_price,omitempty"` // cents, ISOs only
-	ExpirationDate  *string `json:"expiration_date,omitempty"`
-	CliffMonths     int     `json:"cliff_months"`
-	VestingMonths   int     `json:"vesting_months"`
-	VestingInterval string  `json:"vesting_interval"` // monthly, quarterly
-	Note            string  `json:"note"`
+	ID               int64   `json:"id"`
+	Ticker           string  `json:"ticker"`
+	GrantType        string  `json:"grant_type"` // iso, rsu
+	TotalShares      float64 `json:"total_shares"`
+	GrantDate        string  `json:"grant_date"`
+	VestingStartDate string  `json:"vesting_start_date"` // when vesting clock starts (may differ from grant date)
+	FMVAtGrant       *int64  `json:"fmv_at_grant,omitempty"` // cents, FMV per share at grant date
+	StrikePrice      *int64  `json:"strike_price,omitempty"` // cents, ISOs only
+	ExpirationDate   *string `json:"expiration_date,omitempty"`
+	CliffMonths      int     `json:"cliff_months"`
+	VestingMonths    int     `json:"vesting_months"`
+	VestingInterval  string  `json:"vesting_interval"` // monthly, quarterly
+	Note             string  `json:"note"`
 	// computed
 	VestedShares   float64 `json:"vested_shares,omitempty"`
 	UnvestedShares float64 `json:"unvested_shares,omitempty"`

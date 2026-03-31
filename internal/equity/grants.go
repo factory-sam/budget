@@ -20,11 +20,16 @@ func NewGrantService(db *sql.DB, prices *PriceService, portfolio *PortfolioServi
 }
 
 func (g *GrantService) CreateGrant(grant model.EquityGrant) (*model.EquityGrant, error) {
+	// Default vesting start date to grant date if not specified
+	if grant.VestingStartDate == "" {
+		grant.VestingStartDate = grant.GrantDate
+	}
 	res, err := g.db.Exec(`
-		INSERT INTO equity_grants (ticker, grant_type, total_shares, grant_date, strike_price, expiration_date,
-			cliff_months, vesting_months, vesting_interval, note)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO equity_grants (ticker, grant_type, total_shares, grant_date, vesting_start_date, fmv_at_grant,
+			strike_price, expiration_date, cliff_months, vesting_months, vesting_interval, note)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		grant.Ticker, grant.GrantType, grant.TotalShares, grant.GrantDate,
+		grant.VestingStartDate, grant.FMVAtGrant,
 		grant.StrikePrice, grant.ExpirationDate,
 		grant.CliffMonths, grant.VestingMonths, grant.VestingInterval, grant.Note)
 	if err != nil {
@@ -41,7 +46,11 @@ func (g *GrantService) CreateGrant(grant model.EquityGrant) (*model.EquityGrant,
 }
 
 func (g *GrantService) generateVestEvents(grant *model.EquityGrant) error {
-	grantDate, _ := time.Parse("2006-01-02", grant.GrantDate)
+	vestStart := grant.VestingStartDate
+	if vestStart == "" {
+		vestStart = grant.GrantDate
+	}
+	grantDate, _ := time.Parse("2006-01-02", vestStart)
 	totalMonths := grant.VestingMonths
 	cliffMonths := grant.CliffMonths
 
@@ -101,11 +110,27 @@ func (g *GrantService) generateVestEvents(grant *model.EquityGrant) error {
 	return tx.Commit()
 }
 
+const grantCols = `id, ticker, grant_type, total_shares, grant_date, vesting_start_date, fmv_at_grant,
+	strike_price, expiration_date, cliff_months, vesting_months, vesting_interval, note`
+
+func scanGrant(scanner interface{ Scan(...interface{}) error }) (*model.EquityGrant, error) {
+	var gr model.EquityGrant
+	err := scanner.Scan(&gr.ID, &gr.Ticker, &gr.GrantType, &gr.TotalShares, &gr.GrantDate,
+		&gr.VestingStartDate, &gr.FMVAtGrant,
+		&gr.StrikePrice, &gr.ExpirationDate,
+		&gr.CliffMonths, &gr.VestingMonths, &gr.VestingInterval, &gr.Note)
+	if err != nil {
+		return nil, err
+	}
+	// backfill vesting start if empty
+	if gr.VestingStartDate == "" {
+		gr.VestingStartDate = gr.GrantDate
+	}
+	return &gr, nil
+}
+
 func (g *GrantService) ListGrants() ([]model.EquityGrant, error) {
-	rows, err := g.db.Query(`
-		SELECT id, ticker, grant_type, total_shares, grant_date, strike_price, expiration_date,
-			cliff_months, vesting_months, vesting_interval, note
-		FROM equity_grants ORDER BY grant_date`)
+	rows, err := g.db.Query(`SELECT ` + grantCols + ` FROM equity_grants ORDER BY grant_date`)
 	if err != nil {
 		return nil, err
 	}
@@ -113,32 +138,24 @@ func (g *GrantService) ListGrants() ([]model.EquityGrant, error) {
 
 	var grants []model.EquityGrant
 	for rows.Next() {
-		var gr model.EquityGrant
-		rows.Scan(&gr.ID, &gr.Ticker, &gr.GrantType, &gr.TotalShares, &gr.GrantDate,
-			&gr.StrikePrice, &gr.ExpirationDate,
-			&gr.CliffMonths, &gr.VestingMonths, &gr.VestingInterval, &gr.Note)
+		gr, err := scanGrant(rows)
+		if err != nil {
+			continue
+		}
 
-		// compute vested/unvested
 		gr.VestedShares, gr.UnvestedShares, gr.NextVestDate = g.computeVestingStatus(gr.ID, gr.TotalShares)
-		grants = append(grants, gr)
+		grants = append(grants, *gr)
 	}
 	return grants, nil
 }
 
 func (g *GrantService) GetGrant(id int64) (*model.EquityGrant, error) {
-	var gr model.EquityGrant
-	err := g.db.QueryRow(`
-		SELECT id, ticker, grant_type, total_shares, grant_date, strike_price, expiration_date,
-			cliff_months, vesting_months, vesting_interval, note
-		FROM equity_grants WHERE id = ?`, id).
-		Scan(&gr.ID, &gr.Ticker, &gr.GrantType, &gr.TotalShares, &gr.GrantDate,
-			&gr.StrikePrice, &gr.ExpirationDate,
-			&gr.CliffMonths, &gr.VestingMonths, &gr.VestingInterval, &gr.Note)
+	gr, err := scanGrant(g.db.QueryRow(`SELECT `+grantCols+` FROM equity_grants WHERE id = ?`, id))
 	if err != nil {
 		return nil, err
 	}
 	gr.VestedShares, gr.UnvestedShares, gr.NextVestDate = g.computeVestingStatus(gr.ID, gr.TotalShares)
-	return &gr, nil
+	return gr, nil
 }
 
 func (g *GrantService) computeVestingStatus(grantID int64, totalShares float64) (vested, unvested float64, nextVest string) {

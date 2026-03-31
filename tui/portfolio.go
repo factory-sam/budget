@@ -346,6 +346,8 @@ func (p *PortfolioModel) newGrantForm() FormModel {
 		{Label: "Type", Value: "rsu", Options: []string{"iso", "rsu"}},
 		{Label: "Total Shares", Placeholder: "e.g. 10000"},
 		{Label: "Grant Date", Placeholder: "YYYY-MM-DD"},
+		{Label: "Vest Start", Placeholder: "YYYY-MM-DD (blank = grant date)"},
+		{Label: "FMV at Grant", Placeholder: "e.g. 25.00"},
 		{Label: "Strike (ISO)", Placeholder: "e.g. 12.50 (ISOs only)"},
 		{Label: "Cliff Months", Value: "12"},
 		{Label: "Vest Months", Value: "48"},
@@ -355,10 +357,12 @@ func (p *PortfolioModel) newGrantForm() FormModel {
 		grantType := fields[1].Value
 		sharesStr := strings.TrimSpace(fields[2].Value)
 		grantDate := strings.TrimSpace(fields[3].Value)
-		strikeStr := strings.TrimSpace(fields[4].Value)
-		cliffStr := strings.TrimSpace(fields[5].Value)
-		vestStr := strings.TrimSpace(fields[6].Value)
-		interval := fields[7].Value
+		vestStart := strings.TrimSpace(fields[4].Value)
+		fmvStr := strings.TrimSpace(fields[5].Value)
+		strikeStr := strings.TrimSpace(fields[6].Value)
+		cliffStr := strings.TrimSpace(fields[7].Value)
+		vestStr := strings.TrimSpace(fields[8].Value)
+		interval := fields[9].Value
 
 		if ticker == "" {
 			return nil, "Ticker is required"
@@ -383,13 +387,23 @@ func (p *PortfolioModel) newGrantForm() FormModel {
 		}
 
 		grant := model.EquityGrant{
-			Ticker:          ticker,
-			GrantType:       grantType,
-			TotalShares:     shares,
-			GrantDate:       grantDate,
-			CliffMonths:     cliff,
-			VestingMonths:   vest,
-			VestingInterval: interval,
+			Ticker:           ticker,
+			GrantType:        grantType,
+			TotalShares:      shares,
+			GrantDate:        grantDate,
+			VestingStartDate: vestStart,
+			CliffMonths:      cliff,
+			VestingMonths:    vest,
+			VestingInterval:  interval,
+		}
+
+		if fmvStr != "" {
+			fmv, err := strconv.ParseFloat(fmvStr, 64)
+			if err != nil || fmv <= 0 {
+				return nil, "Invalid FMV — enter a number like 25.00"
+			}
+			fmvCents := int64(math.Round(fmv * 100))
+			grant.FMVAtGrant = &fmvCents
 		}
 
 		if grantType == "iso" {
@@ -582,13 +596,19 @@ func (p PortfolioModel) viewGrants() string {
 
 	for i, g := range p.grantList {
 		typeStr := strings.ToUpper(g.GrantType)
-		strikeStr := ""
+		details := ""
 		if g.StrikePrice != nil {
-			strikeStr = fmt.Sprintf("  strike $%.2f", float64(*g.StrikePrice)/100)
+			details += fmt.Sprintf("  strike $%.2f", float64(*g.StrikePrice)/100)
+		}
+		if g.FMVAtGrant != nil {
+			details += fmt.Sprintf("  FMV $%.2f", float64(*g.FMVAtGrant)/100)
+		}
+		if g.VestingStartDate != "" && g.VestingStartDate != g.GrantDate {
+			details += fmt.Sprintf("  vest from %s", g.VestingStartDate)
 		}
 
-		line := fmt.Sprintf("  %s %s  %.0f shares%s",
-			g.Ticker, typeStr, g.TotalShares, strikeStr)
+		line := fmt.Sprintf("  %s %s  %.0f shares%s  (granted %s)",
+			g.Ticker, typeStr, g.TotalShares, details, g.GrantDate)
 
 		if i == p.cursor {
 			line = selectedRowStyle.Render(line)

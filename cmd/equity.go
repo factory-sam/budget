@@ -273,7 +273,9 @@ var equityGrantAddCmd = &cobra.Command{
 		grantType, _ := cmd.Flags().GetString("type")
 		shares, _ := cmd.Flags().GetFloat64("shares")
 		strike, _ := cmd.Flags().GetFloat64("strike")
+		fmv, _ := cmd.Flags().GetFloat64("fmv")
 		date, _ := cmd.Flags().GetString("date")
+		vestStart, _ := cmd.Flags().GetString("vest-start")
 		expDate, _ := cmd.Flags().GetString("expiration")
 		cliff, _ := cmd.Flags().GetInt("cliff")
 		vest, _ := cmd.Flags().GetInt("vest")
@@ -289,14 +291,20 @@ var equityGrantAddCmd = &cobra.Command{
 		ticker = strings.ToUpper(ticker)
 
 		grant := model.EquityGrant{
-			Ticker:          ticker,
-			GrantType:       grantType,
-			TotalShares:     shares,
-			GrantDate:       date,
-			CliffMonths:     cliff,
-			VestingMonths:   vest,
-			VestingInterval: interval,
-			Note:            note,
+			Ticker:           ticker,
+			GrantType:        grantType,
+			TotalShares:      shares,
+			GrantDate:        date,
+			VestingStartDate: vestStart,
+			CliffMonths:      cliff,
+			VestingMonths:    vest,
+			VestingInterval:  interval,
+			Note:             note,
+		}
+
+		if fmv > 0 {
+			fmvCents := int64(math.Round(fmv * 100))
+			grant.FMVAtGrant = &fmvCents
 		}
 
 		if grantType == "iso" {
@@ -346,15 +354,23 @@ var equityGrantListCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tTICKER\tTYPE\tTOTAL\tVESTED\tUNVESTED\tSTRIKE\tNEXT VEST")
+		fmt.Fprintln(w, "ID\tTICKER\tTYPE\tTOTAL\tVESTED\tUNVESTED\tSTRIKE\tFMV\tVEST START\tNEXT VEST")
 		for _, g := range grants {
 			strikeStr := "—"
 			if g.StrikePrice != nil {
 				strikeStr = fmt.Sprintf("$%.2f", float64(*g.StrikePrice)/100)
 			}
-			fmt.Fprintf(w, "%d\t%s\t%s\t%.0f\t%.0f\t%.0f\t%s\t%s\n",
+			fmvStr := "—"
+			if g.FMVAtGrant != nil {
+				fmvStr = fmt.Sprintf("$%.2f", float64(*g.FMVAtGrant)/100)
+			}
+			vestStart := g.VestingStartDate
+			if vestStart == "" || vestStart == g.GrantDate {
+				vestStart = "—"
+			}
+			fmt.Fprintf(w, "%d\t%s\t%s\t%.0f\t%.0f\t%.0f\t%s\t%s\t%s\t%s\n",
 				g.ID, g.Ticker, strings.ToUpper(g.GrantType), g.TotalShares,
-				g.VestedShares, g.UnvestedShares, strikeStr, g.NextVestDate)
+				g.VestedShares, g.UnvestedShares, strikeStr, fmvStr, vestStart, g.NextVestDate)
 		}
 		return w.Flush()
 	},
@@ -581,7 +597,9 @@ func init() {
 	equityGrantAddCmd.Flags().String("type", "", "grant type (iso, rsu)")
 	equityGrantAddCmd.Flags().Float64("shares", 0, "total shares granted")
 	equityGrantAddCmd.Flags().Float64("strike", 0, "strike price (ISOs only)")
+	equityGrantAddCmd.Flags().Float64("fmv", 0, "FMV per share at grant date")
 	equityGrantAddCmd.Flags().String("date", "", "grant date (YYYY-MM-DD)")
+	equityGrantAddCmd.Flags().String("vest-start", "", "vesting start date (defaults to grant date)")
 	equityGrantAddCmd.Flags().String("expiration", "", "expiration date (ISOs only)")
 	equityGrantAddCmd.Flags().Int("cliff", 12, "cliff months")
 	equityGrantAddCmd.Flags().Int("vest", 48, "total vesting months")

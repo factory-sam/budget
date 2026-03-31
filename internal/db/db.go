@@ -42,6 +42,8 @@ func migrate(db *sql.DB) error {
 var migrations = []string{
 	"ALTER TABLE accounts ADD COLUMN tracking_mode TEXT NOT NULL DEFAULT 'holdings'",
 	"ALTER TABLE equity_lots ADD COLUMN account_id INTEGER REFERENCES accounts(id)",
+	"ALTER TABLE equity_grants ADD COLUMN fmv_at_grant INTEGER",
+	"ALTER TABLE equity_grants ADD COLUMN vesting_start_date TEXT NOT NULL DEFAULT ''",
 }
 
 const schema = `
@@ -162,6 +164,8 @@ CREATE TABLE IF NOT EXISTS equity_grants (
 	grant_type TEXT NOT NULL,
 	total_shares REAL NOT NULL,
 	grant_date TEXT NOT NULL,
+	vesting_start_date TEXT NOT NULL DEFAULT '',
+	fmv_at_grant INTEGER,
 	strike_price INTEGER,
 	expiration_date TEXT,
 	cliff_months INTEGER NOT NULL DEFAULT 12,
