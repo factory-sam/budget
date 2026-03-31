@@ -145,6 +145,14 @@ CREATE TABLE IF NOT EXISTS networth_snapshots (
 	net_worth INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS account_balance_history (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	account_id INTEGER NOT NULL REFERENCES accounts(id),
+	date TEXT NOT NULL,
+	balance INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(account_id, date)
+);
+
 CREATE TABLE IF NOT EXISTS import_records (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	filename TEXT NOT NULL,

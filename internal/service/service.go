@@ -621,7 +621,39 @@ func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
 	nw := assets - liabilities
 	s.db.Exec(`INSERT OR REPLACE INTO networth_snapshots (date, total_assets, total_liabilities, equity_value, net_worth) VALUES (?, ?, ?, ?, ?)`,
 		today, assets, liabilities, equityValue, nw)
+	// Snapshot each account's balance for sparkline history
+	s.snapshotAccountBalances(today)
+
 	return &model.NetWorthSnapshot{Date: today, TotalAssets: assets, TotalLiabilities: liabilities, EquityValue: equityValue, NetWorth: nw}, nil
+}
+
+func (s *Service) snapshotAccountBalances(date string) {
+	accs, _ := s.ListAccounts()
+	for _, a := range accs {
+		s.db.Exec(`INSERT OR REPLACE INTO account_balance_history (account_id, date, balance) VALUES (?, ?, ?)`,
+			a.ID, date, a.Balance)
+	}
+}
+
+func (s *Service) GetAccountBalanceHistory(accountID int64, days int) ([]int64, error) {
+	rows, err := s.db.Query(`
+		SELECT balance FROM account_balance_history
+		WHERE account_id = ? ORDER BY date DESC LIMIT ?`, accountID, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var balances []int64
+	for rows.Next() {
+		var b int64
+		rows.Scan(&b)
+		balances = append(balances, b)
+	}
+	// Reverse to chronological order
+	for i, j := 0, len(balances)-1; i < j; i, j = i+1, j-1 {
+		balances[i], balances[j] = balances[j], balances[i]
+	}
+	return balances, nil
 }
 
 func (s *Service) GetNetWorthHistory(limit int) ([]model.NetWorthSnapshot, error) {

@@ -7,6 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
+	"github.com/NimbleMarkets/ntcharts/sparkline"
 	"github.com/sam/budget/internal/model"
 	"github.com/sam/budget/internal/service"
 )
@@ -19,6 +21,9 @@ type DashboardModel struct {
 	spending      []service.SpendingByCategory
 	recentTxs     []model.Transaction
 	accounts      []model.Account
+	nwHistory     []model.NetWorthSnapshot
+	acctHistory   map[int64][]int64 // accountID -> balance history
+	cashflow      []service.CashFlowReport
 }
 
 func NewDashboardModel(svc *service.Service) DashboardModel {
@@ -31,6 +36,9 @@ type dashDataMsg struct {
 	spending     []service.SpendingByCategory
 	recentTxs    []model.Transaction
 	accounts     []model.Account
+	nwHistory    []model.NetWorthSnapshot
+	acctHistory  map[int64][]int64
+	cashflow     []service.CashFlowReport
 }
 
 func (d DashboardModel) Init() tea.Cmd {
@@ -41,7 +49,18 @@ func (d DashboardModel) Init() tea.Cmd {
 		sp, _ := d.svc.SpendingReport(now.Year(), int(now.Month()))
 		txs, _ := d.svc.ListTransactions(model.TxFilter{Limit: 10})
 		accs, _ := d.svc.ListAccounts()
-		return dashDataMsg{nw, bs, sp, txs, accs}
+		nwh, _ := d.svc.GetNetWorthHistory(365)
+		ah := make(map[int64][]int64)
+		for _, a := range accs {
+			hist, _ := d.svc.GetAccountBalanceHistory(a.ID, 30)
+			if len(hist) > 0 {
+				ah[a.ID] = hist
+			}
+		}
+		from := now.AddDate(0, -6, 0).Format("2006-01-02")
+		to := now.Format("2006-01-02")
+		cf, _ := d.svc.CashFlowReport(from, to)
+		return dashDataMsg{nw, bs, sp, txs, accs, nwh, ah, cf}
 	}
 }
 
@@ -53,6 +72,9 @@ func (d DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 		d.spending = msg.spending
 		d.recentTxs = msg.recentTxs
 		d.accounts = msg.accounts
+		d.nwHistory = msg.nwHistory
+		d.acctHistory = msg.acctHistory
+		d.cashflow = msg.cashflow
 	}
 	return d, nil
 }
@@ -72,15 +94,29 @@ func (d DashboardModel) View() string {
 		colWidth = 30
 	}
 
-	// Left column: Net Worth + Accounts
-	nwBox := d.renderNetWorth(colWidth)
-	accBox := d.renderAccounts(colWidth)
-	leftCol := lipgloss.JoinVertical(lipgloss.Left, nwBox, "", accBox)
+	// Single-column for narrow terminals
+	if d.width < 80 {
+		nwBox := d.renderNetWorth(d.width - 4)
+		nwChart := d.renderNetWorthChart(d.width-4, 8)
+		accBox := d.renderAccounts(d.width - 4)
+		budgetBox := d.renderBudgetSummary(d.width - 4)
+		spendBox := d.renderTopSpending(d.width - 4)
+		txBox := d.renderRecentTxs()
+		return lipgloss.JoinVertical(lipgloss.Left,
+			nwBox, nwChart, accBox, "", budgetBox, "", spendBox, "", txBox)
+	}
 
-	// Right column: Budget Progress + Top Spending
+	// Left column: Net Worth + Chart + Accounts
+	nwBox := d.renderNetWorth(colWidth)
+	nwChart := d.renderNetWorthChart(colWidth, 8)
+	accBox := d.renderAccounts(colWidth)
+	leftCol := lipgloss.JoinVertical(lipgloss.Left, nwBox, nwChart, accBox)
+
+	// Right column: Budget Progress + Top Spending + Cash Flow
 	budgetBox := d.renderBudgetSummary(colWidth)
 	spendBox := d.renderTopSpending(colWidth)
-	rightCol := lipgloss.JoinVertical(lipgloss.Left, budgetBox, "", spendBox)
+	cfBox := d.renderCashFlowMini(colWidth)
+	rightCol := lipgloss.JoinVertical(lipgloss.Left, budgetBox, "", spendBox, "", cfBox)
 
 	top := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, "  ", rightCol)
 
@@ -112,13 +148,55 @@ func (d DashboardModel) renderNetWorth(w int) string {
 	return boxStyle.Width(w).Render(s)
 }
 
+func (d DashboardModel) renderNetWorthChart(w, h int) string {
+	if len(d.nwHistory) < 2 {
+		return ""
+	}
+
+	chartW := w - 2
+	if chartW < 20 {
+		chartW = 20
+	}
+
+	tslc := timeserieslinechart.New(chartW, h,
+		timeserieslinechart.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("10"))),
+	)
+
+	for _, snap := range d.nwHistory {
+		t, err := time.Parse("2006-01-02", snap.Date)
+		if err != nil {
+			continue
+		}
+		tslc.Push(timeserieslinechart.TimePoint{Time: t, Value: float64(snap.NetWorth) / 100})
+	}
+	tslc.DrawBraille()
+	return "  " + tslc.View()
+}
+
 func (d DashboardModel) renderAccounts(w int) string {
 	s := headerStyle.Render("Accounts")
 	if len(d.accounts) == 0 {
 		return boxStyle.Width(w).Render(s + "\n  No accounts yet")
 	}
 	for _, a := range d.accounts {
-		s += fmt.Sprintf("\n  %-20s $%.2f", a.Name, float64(a.Balance)/100)
+		line := fmt.Sprintf("\n  %-18s $%.2f", truncStr(a.Name, 18), float64(a.Balance)/100)
+		// Add sparkline if we have history
+		if hist, ok := d.acctHistory[a.ID]; ok && len(hist) > 1 {
+			sparkW := w - 40
+			if sparkW < 8 {
+				sparkW = 8
+			}
+			if sparkW > 20 {
+				sparkW = 20
+			}
+			sl := sparkline.New(sparkW, 1)
+			for _, b := range hist {
+				sl.Push(float64(b) / 100)
+			}
+			sl.Draw()
+			line += "  " + sl.View()
+		}
+		s += line
 	}
 	return boxStyle.Width(w).Render(s)
 }
@@ -126,10 +204,18 @@ func (d DashboardModel) renderAccounts(w int) string {
 func (d DashboardModel) renderBudgetSummary(w int) string {
 	now := time.Now()
 	s := headerStyle.Render(fmt.Sprintf("Budgets — %s %d", now.Month().String(), now.Year()))
-	if len(d.budgetStatus) == 0 {
-		return boxStyle.Width(w).Render(s + "\n  No budgets set")
-	}
+
+	// Filter: only show categories with a budget set or actual spending
+	var active []model.BudgetStatus
 	for _, b := range d.budgetStatus {
+		if b.AmountLimit > 0 || b.Spent > 0 {
+			active = append(active, b)
+		}
+	}
+	if len(active) == 0 {
+		return boxStyle.Width(w).Render(s + "\n  No activity this month")
+	}
+	for _, b := range active {
 		barW := w - 30
 		if barW < 10 {
 			barW = 10
@@ -143,6 +229,8 @@ func (d DashboardModel) renderBudgetSummary(w int) string {
 
 		var barStyle lipgloss.Style
 		switch {
+		case b.AmountLimit == 0:
+			barStyle = lipgloss.NewStyle().Foreground(muted)
 		case b.Percent > 100:
 			barStyle = redStyle
 		case b.Percent > 80:
@@ -151,7 +239,64 @@ func (d DashboardModel) renderBudgetSummary(w int) string {
 			barStyle = greenStyle
 		}
 		bar := barStyle.Render(strings.Repeat("█", filled)) + strings.Repeat("░", empty)
-		s += fmt.Sprintf("\n  %-15s %s %.0f%%", truncStr(b.CategoryName, 15), bar, b.Percent)
+
+		label := truncStr(b.CategoryName, 15)
+		if b.AmountLimit > 0 {
+			s += fmt.Sprintf("\n  %-15s %s %.0f%%", label, bar, b.Percent)
+		} else {
+			s += fmt.Sprintf("\n  %-15s $%.2f (no limit)", label, float64(b.Spent)/100)
+		}
+	}
+	return boxStyle.Width(w).Render(s)
+}
+
+func (d DashboardModel) renderCashFlowMini(w int) string {
+	s := headerStyle.Render("Cash Flow — Last 6 Months")
+	if len(d.cashflow) == 0 {
+		return boxStyle.Width(w).Render(s + "\n  No data")
+	}
+
+	var maxVal int64
+	for _, cf := range d.cashflow {
+		if cf.Income > maxVal {
+			maxVal = cf.Income
+		}
+		if cf.Expenses > maxVal {
+			maxVal = cf.Expenses
+		}
+	}
+
+	barW := (w - 30) / 2
+	if barW < 5 {
+		barW = 5
+	}
+
+	for _, cf := range d.cashflow {
+		incBar := 0
+		expBar := 0
+		if maxVal > 0 {
+			incBar = int(float64(cf.Income) / float64(maxVal) * float64(barW))
+			expBar = int(float64(cf.Expenses) / float64(maxVal) * float64(barW))
+		}
+		if incBar < 1 && cf.Income > 0 {
+			incBar = 1
+		}
+		if expBar < 1 && cf.Expenses > 0 {
+			expBar = 1
+		}
+		net := cf.Income - cf.Expenses
+		netStyle := greenStyle
+		netSign := "+"
+		if net < 0 {
+			netStyle = redStyle
+			netSign = ""
+		}
+		s += fmt.Sprintf("\n  %s %s%s %s",
+			cf.Month[:7],
+			greenStyle.Render(strings.Repeat("█", incBar))+redStyle.Render(strings.Repeat("▒", expBar)),
+			strings.Repeat("░", barW*2-incBar-expBar),
+			netStyle.Render(fmt.Sprintf("%s$%.0f", netSign, float64(net)/100)),
+		)
 	}
 	return boxStyle.Width(w).Render(s)
 }

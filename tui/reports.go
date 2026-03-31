@@ -7,6 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
+	"github.com/sam/budget/internal/model"
 	"github.com/sam/budget/internal/service"
 )
 
@@ -16,8 +18,9 @@ type ReportsModel struct {
 	spending      []service.SpendingByCategory
 	cashflow      []service.CashFlowReport
 	income        []service.IncomePeriod
+	nwHistory     []model.NetWorthSnapshot
 	incomeGroup   string // monthly, quarterly, yearly
-	activeReport  int    // 0=spending, 1=cashflow, 2=income
+	activeReport  int    // 0=spending, 1=cashflow, 2=income, 3=net worth
 }
 
 func NewReportsModel(svc *service.Service) ReportsModel {
@@ -25,9 +28,10 @@ func NewReportsModel(svc *service.Service) ReportsModel {
 }
 
 type reportsDataMsg struct {
-	spending []service.SpendingByCategory
-	cashflow []service.CashFlowReport
-	income   []service.IncomePeriod
+	spending  []service.SpendingByCategory
+	cashflow  []service.CashFlowReport
+	income    []service.IncomePeriod
+	nwHistory []model.NetWorthSnapshot
 }
 
 func (r ReportsModel) Init() tea.Cmd {
@@ -40,7 +44,8 @@ func (r ReportsModel) Init() tea.Cmd {
 		cf, _ := r.svc.CashFlowReport(from, to)
 		incFrom := now.AddDate(-1, 0, 0).Format("2006-01-02")
 		inc, _ := r.svc.IncomeReport(incFrom, to, group)
-		return reportsDataMsg{sp, cf, inc}
+		nwh, _ := r.svc.GetNetWorthHistory(365)
+		return reportsDataMsg{sp, cf, inc, nwh}
 	}
 }
 
@@ -50,6 +55,7 @@ func (r ReportsModel) Update(msg tea.Msg) (ReportsModel, tea.Cmd) {
 		r.spending = msg.spending
 		r.cashflow = msg.cashflow
 		r.income = msg.income
+		r.nwHistory = msg.nwHistory
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "h", "left":
@@ -57,7 +63,7 @@ func (r ReportsModel) Update(msg tea.Msg) (ReportsModel, tea.Cmd) {
 				r.activeReport--
 			}
 		case "l", "right":
-			if r.activeReport < 2 {
+			if r.activeReport < 3 {
 				r.activeReport++
 			}
 		case "g":
@@ -87,7 +93,7 @@ func (r ReportsModel) View() string {
 	var sb strings.Builder
 
 	// Report tabs
-	tabs := []string{"Spending", "Cash Flow", "Income"}
+	tabs := []string{"Spending", "Cash Flow", "Income", "Net Worth"}
 	for i, t := range tabs {
 		if i == r.activeReport {
 			sb.WriteString(activeTabStyle.Render(t) + " ")
@@ -104,6 +110,8 @@ func (r ReportsModel) View() string {
 		sb.WriteString(r.viewCashFlow())
 	case 2:
 		sb.WriteString(r.viewIncome())
+	case 3:
+		sb.WriteString(r.viewNetWorthHistory())
 	}
 
 	help := "h/l:switch reports"
@@ -297,5 +305,64 @@ func (r ReportsModel) viewCashFlow() string {
 
 		sb.WriteString("\n")
 	}
+	return sb.String()
+}
+
+func (r ReportsModel) viewNetWorthHistory() string {
+	var sb strings.Builder
+	sb.WriteString(headerStyle.Render("Net Worth Over Time") + "\n\n")
+
+	if len(r.nwHistory) < 2 {
+		sb.WriteString("  Not enough data yet. Net worth history builds as you use the app.\n")
+		return sb.String()
+	}
+
+	chartW := r.width - 8
+	if chartW < 30 {
+		chartW = 30
+	}
+	if chartW > 100 {
+		chartW = 100
+	}
+	chartH := r.height - 12
+	if chartH < 8 {
+		chartH = 8
+	}
+	if chartH > 20 {
+		chartH = 20
+	}
+
+	tslc := timeserieslinechart.New(chartW, chartH,
+		timeserieslinechart.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("10"))),
+	)
+
+	var latest model.NetWorthSnapshot
+	for _, snap := range r.nwHistory {
+		t, err := time.Parse("2006-01-02", snap.Date)
+		if err != nil {
+			continue
+		}
+		tslc.Push(timeserieslinechart.TimePoint{Time: t, Value: float64(snap.NetWorth) / 100})
+		latest = snap
+	}
+	tslc.DrawBraille()
+	sb.WriteString("  " + tslc.View() + "\n\n")
+
+	// nwHistory is in desc order (newest first), so first entry is latest
+	first := r.nwHistory[len(r.nwHistory)-1] // oldest
+	change := latest.NetWorth - first.NetWorth
+	changeStyle := greenStyle
+	changeSign := "+"
+	if change < 0 {
+		changeStyle = redStyle
+		changeSign = ""
+	}
+	sb.WriteString(fmt.Sprintf("  Current: %s  |  Change: %s  |  Period: %s to %s\n",
+		greenStyle.Bold(true).Render(fmt.Sprintf("$%.2f", float64(latest.NetWorth)/100)),
+		changeStyle.Render(fmt.Sprintf("%s$%.2f", changeSign, float64(change)/100)),
+		first.Date, latest.Date))
+	sb.WriteString(fmt.Sprintf("  Assets: $%.2f  |  Investments: $%.2f  |  Liabilities: $%.2f\n",
+		float64(latest.TotalAssets)/100, float64(latest.EquityValue)/100, float64(latest.TotalLiabilities)/100))
+
 	return sb.String()
 }
