@@ -15,26 +15,32 @@ type ReportsModel struct {
 	width, height int
 	spending      []service.SpendingByCategory
 	cashflow      []service.CashFlowReport
-	activeReport  int // 0=spending, 1=cashflow
+	income        []service.IncomePeriod
+	incomeGroup   string // monthly, quarterly, yearly
+	activeReport  int    // 0=spending, 1=cashflow, 2=income
 }
 
 func NewReportsModel(svc *service.Service) ReportsModel {
-	return ReportsModel{svc: svc}
+	return ReportsModel{svc: svc, incomeGroup: "monthly"}
 }
 
 type reportsDataMsg struct {
 	spending []service.SpendingByCategory
 	cashflow []service.CashFlowReport
+	income   []service.IncomePeriod
 }
 
 func (r ReportsModel) Init() tea.Cmd {
+	group := r.incomeGroup
 	return func() tea.Msg {
 		now := time.Now()
 		sp, _ := r.svc.SpendingReport(now.Year(), int(now.Month()))
 		from := now.AddDate(0, -6, 0).Format("2006-01-02")
 		to := now.Format("2006-01-02")
 		cf, _ := r.svc.CashFlowReport(from, to)
-		return reportsDataMsg{sp, cf}
+		incFrom := now.AddDate(-1, 0, 0).Format("2006-01-02")
+		inc, _ := r.svc.IncomeReport(incFrom, to, group)
+		return reportsDataMsg{sp, cf, inc}
 	}
 }
 
@@ -43,6 +49,7 @@ func (r ReportsModel) Update(msg tea.Msg) (ReportsModel, tea.Cmd) {
 	case reportsDataMsg:
 		r.spending = msg.spending
 		r.cashflow = msg.cashflow
+		r.income = msg.income
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "h", "left":
@@ -50,8 +57,21 @@ func (r ReportsModel) Update(msg tea.Msg) (ReportsModel, tea.Cmd) {
 				r.activeReport--
 			}
 		case "l", "right":
-			if r.activeReport < 1 {
+			if r.activeReport < 2 {
 				r.activeReport++
+			}
+		case "g":
+			// cycle income grouping when on income tab
+			if r.activeReport == 2 {
+				switch r.incomeGroup {
+				case "monthly":
+					r.incomeGroup = "quarterly"
+				case "quarterly":
+					r.incomeGroup = "yearly"
+				default:
+					r.incomeGroup = "monthly"
+				}
+				return r, r.Init()
 			}
 		}
 	}
@@ -67,7 +87,7 @@ func (r ReportsModel) View() string {
 	var sb strings.Builder
 
 	// Report tabs
-	tabs := []string{"Spending", "Cash Flow"}
+	tabs := []string{"Spending", "Cash Flow", "Income"}
 	for i, t := range tabs {
 		if i == r.activeReport {
 			sb.WriteString(activeTabStyle.Render(t) + " ")
@@ -82,9 +102,15 @@ func (r ReportsModel) View() string {
 		sb.WriteString(r.viewSpending())
 	case 1:
 		sb.WriteString(r.viewCashFlow())
+	case 2:
+		sb.WriteString(r.viewIncome())
 	}
 
-	sb.WriteString("\n  h/l:switch reports")
+	help := "h/l:switch reports"
+	if r.activeReport == 2 {
+		help += "  g:cycle grouping (" + r.incomeGroup + ")"
+	}
+	sb.WriteString("\n  " + help)
 	return sb.String()
 }
 
@@ -123,6 +149,67 @@ func (r ReportsModel) viewSpending() string {
 		total += sp.Amount
 	}
 	sb.WriteString(fmt.Sprintf("\n  Total: $%.2f\n", float64(total)/100))
+	return sb.String()
+}
+
+func (r ReportsModel) viewIncome() string {
+	var sb strings.Builder
+	sb.WriteString(headerStyle.Render(fmt.Sprintf("Income by Source — Last 12 Months (%s)", r.incomeGroup)) + "\n\n")
+
+	if len(r.income) == 0 {
+		sb.WriteString("  No income data.\n")
+		return sb.String()
+	}
+
+	// Grand total
+	var grandTotal int64
+	for _, p := range r.income {
+		grandTotal += p.Total
+	}
+	sb.WriteString(fmt.Sprintf("  Total: %s\n\n",
+		greenStyle.Render(fmt.Sprintf("$%.2f", float64(grandTotal)/100))))
+
+	barWidth := r.width - 55
+	if barWidth < 15 {
+		barWidth = 15
+	}
+	if barWidth > 35 {
+		barWidth = 35
+	}
+
+	// Find max source for scaling
+	var maxAmt int64
+	for _, p := range r.income {
+		for _, s := range p.Sources {
+			if s.Amount > maxAmt {
+				maxAmt = s.Amount
+			}
+		}
+	}
+
+	for _, p := range r.income {
+		sb.WriteString(fmt.Sprintf("  %s  %s\n",
+			lipgloss.NewStyle().Bold(true).Render(p.Period),
+			greenStyle.Render(fmt.Sprintf("$%.2f", float64(p.Total)/100))))
+
+		for _, s := range p.Sources {
+			bar := 0
+			if maxAmt > 0 {
+				bar = int(float64(s.Amount) / float64(maxAmt) * float64(barWidth))
+			}
+			if bar < 1 && s.Amount > 0 {
+				bar = 1
+			}
+			pad := strings.Repeat("░", barWidth-bar)
+			sb.WriteString(fmt.Sprintf("    %-18s %s%s  %s (%4.1f%%)\n",
+				truncStr(s.CategoryName, 18),
+				greenStyle.Render(strings.Repeat("█", bar)),
+				pad,
+				greenStyle.Render(fmt.Sprintf("$%.2f", float64(s.Amount)/100)),
+				s.Percent))
+		}
+		sb.WriteString("\n")
+	}
 	return sb.String()
 }
 

@@ -154,6 +154,76 @@ var reportCashflowCmd = &cobra.Command{
 	},
 }
 
+var reportIncomeCmd = &cobra.Command{
+	Use:   "income",
+	Short: "Income by source over time (monthly, quarterly, yearly)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		from, _ := cmd.Flags().GetString("from")
+		to, _ := cmd.Flags().GetString("to")
+		groupBy, _ := cmd.Flags().GetString("group")
+
+		if from == "" {
+			from = time.Now().AddDate(-1, 0, 0).Format("2006-01-02")
+		}
+		if to == "" {
+			to = time.Now().Format("2006-01-02")
+		}
+
+		results, err := service.IncomeReport(from, to, groupBy)
+		if err != nil {
+			return err
+		}
+
+		format, _ := cmd.Flags().GetString("format")
+		if format == "json" {
+			return json.NewEncoder(os.Stdout).Encode(results)
+		}
+
+		if len(results) == 0 {
+			fmt.Println("No income for the period.")
+			return nil
+		}
+
+		var grandTotal int64
+		for _, p := range results {
+			grandTotal += p.Total
+		}
+
+		fmt.Printf("Income Report — %s to %s (by %s)\n", from[:7], to[:7], groupBy)
+		fmt.Printf("Total: $%.2f\n\n", float64(grandTotal)/100)
+
+		barWidth := 30
+		// Find max source amount for bar scaling
+		var maxAmt int64
+		for _, p := range results {
+			for _, s := range p.Sources {
+				if s.Amount > maxAmt {
+					maxAmt = s.Amount
+				}
+			}
+		}
+
+		for _, p := range results {
+			fmt.Printf("  %s  $%.2f\n", p.Period, float64(p.Total)/100)
+			for _, s := range p.Sources {
+				bar := 0
+				if maxAmt > 0 {
+					bar = int(float64(s.Amount) / float64(maxAmt) * float64(barWidth))
+				}
+				if bar < 1 && s.Amount > 0 {
+					bar = 1
+				}
+				pad := strings.Repeat("░", barWidth-bar)
+				fmt.Printf("    %-20s %s%s  $%.2f (%4.1f%%)\n",
+					s.CategoryName, strings.Repeat("█", bar), pad,
+					float64(s.Amount)/100, s.Percent)
+			}
+			fmt.Println()
+		}
+		return nil
+	},
+}
+
 func init() {
 	reportSpendingCmd.Flags().String("month", "", "target month (YYYY-MM)")
 	reportSpendingCmd.Flags().String("format", "table", "output format")
@@ -162,6 +232,11 @@ func init() {
 	reportCashflowCmd.Flags().String("to", "", "end date (YYYY-MM-DD)")
 	reportCashflowCmd.Flags().String("format", "table", "output format")
 
-	reportCmd.AddCommand(reportSpendingCmd, reportNetworthCmd, reportCashflowCmd)
+	reportIncomeCmd.Flags().String("from", "", "start date (YYYY-MM-DD)")
+	reportIncomeCmd.Flags().String("to", "", "end date (YYYY-MM-DD)")
+	reportIncomeCmd.Flags().String("group", "monthly", "grouping: monthly, quarterly, yearly")
+	reportIncomeCmd.Flags().String("format", "table", "output format")
+
+	reportCmd.AddCommand(reportSpendingCmd, reportNetworthCmd, reportCashflowCmd, reportIncomeCmd)
 	rootCmd.AddCommand(reportCmd)
 }

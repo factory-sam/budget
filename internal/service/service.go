@@ -647,6 +647,69 @@ func (s *Service) SpendingReport(year, month int) ([]SpendingByCategory, error) 
 	return results, nil
 }
 
+type IncomeBySource struct {
+	CategoryName string `json:"category"`
+	Amount       int64  `json:"amount"`
+	Percent      float64 `json:"percent"`
+}
+
+type IncomePeriod struct {
+	Period  string           `json:"period"`
+	Total   int64            `json:"total"`
+	Sources []IncomeBySource `json:"sources"`
+}
+
+func (s *Service) IncomeReport(from, to, groupBy string) ([]IncomePeriod, error) {
+	var periodExpr string
+	switch groupBy {
+	case "quarterly":
+		periodExpr = "SUBSTR(date,1,4) || '-Q' || ((CAST(SUBSTR(date,6,2) AS INTEGER)-1)/3 + 1)"
+	case "yearly":
+		periodExpr = "SUBSTR(date,1,4)"
+	default:
+		periodExpr = "SUBSTR(date,1,7)"
+	}
+
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT %s as period, COALESCE(c.name, 'Uncategorized'), SUM(t.amount)
+		FROM transactions t
+		LEFT JOIN categories c ON t.category_id = c.id
+		WHERE t.type = 'income' AND t.date >= ? AND t.date <= ?
+		GROUP BY period, c.name
+		ORDER BY period, SUM(t.amount) DESC`, periodExpr), from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	periodMap := make(map[string]*IncomePeriod)
+	var periodOrder []string
+	for rows.Next() {
+		var period, cat string
+		var amount int64
+		rows.Scan(&period, &cat, &amount)
+		if _, ok := periodMap[period]; !ok {
+			periodMap[period] = &IncomePeriod{Period: period}
+			periodOrder = append(periodOrder, period)
+		}
+		p := periodMap[period]
+		p.Total += amount
+		p.Sources = append(p.Sources, IncomeBySource{CategoryName: cat, Amount: amount})
+	}
+
+	var results []IncomePeriod
+	for _, key := range periodOrder {
+		p := periodMap[key]
+		for i := range p.Sources {
+			if p.Total > 0 {
+				p.Sources[i].Percent = float64(p.Sources[i].Amount) / float64(p.Total) * 100
+			}
+		}
+		results = append(results, *p)
+	}
+	return results, nil
+}
+
 type CashFlowReport struct {
 	Month    string `json:"month"`
 	Income   int64  `json:"income"`
