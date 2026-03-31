@@ -307,6 +307,46 @@ func (s *Service) DeleteTransaction(id int64) error {
 	return s.UpdateAccountBalance(accountID, delta)
 }
 
+func (s *Service) UpdateTransactionCategory(txID int64, categoryID *int64) error {
+	_, err := s.db.Exec("UPDATE transactions SET category_id = ? WHERE id = ?", categoryID, txID)
+	return err
+}
+
+func (s *Service) UpdateTransactionType(txID int64, newType model.TxType) error {
+	// Get current type and amount to adjust account balance
+	var accountID, amount int64
+	var oldType string
+	err := s.db.QueryRow("SELECT account_id, amount, type FROM transactions WHERE id = ?", txID).
+		Scan(&accountID, &amount, &oldType)
+	if err != nil {
+		return err
+	}
+	if model.TxType(oldType) == newType {
+		return nil
+	}
+
+	// Reverse old balance effect
+	switch model.TxType(oldType) {
+	case model.TxIncome:
+		s.UpdateAccountBalance(accountID, -amount)
+	case model.TxExpense:
+		s.UpdateAccountBalance(accountID, amount)
+	// transfer: no balance effect
+	}
+
+	// Apply new balance effect
+	switch newType {
+	case model.TxIncome:
+		s.UpdateAccountBalance(accountID, amount)
+	case model.TxExpense:
+		s.UpdateAccountBalance(accountID, -amount)
+	// transfer: no balance effect
+	}
+
+	_, err = s.db.Exec("UPDATE transactions SET type = ? WHERE id = ?", newType, txID)
+	return err
+}
+
 // --- Budgets ---
 
 func (s *Service) SetBudget(categoryID int64, year, month int, amountCents int64) error {

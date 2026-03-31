@@ -270,10 +270,13 @@ func (a *App) helpText() string {
 	case TabDashboard:
 		return common
 	case TabTransactions:
+		if a.transactions.catPicking {
+			return "j/k:navigate  enter:select  esc:cancel  type to filter"
+		}
 		if a.transactions.InputActive() {
 			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
 		}
-		return "j/k:navigate  a:add  /:search  d:delete  g/G:top/bottom  " + common
+		return "j/k:navigate  a:add  c:categorize  t:type  /:search  d:delete  g/G:top/bottom  " + common
 	case TabBudgets:
 		if a.budgets.InputActive() {
 			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
