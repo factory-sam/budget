@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sam/budget/internal/equity"
 	"github.com/sam/budget/internal/service"
 )
 
@@ -18,9 +19,10 @@ const (
 	TabAccounts
 	TabRecurring
 	TabReports
+	TabPortfolio
 )
 
-var tabNames = []string{"Dashboard", "Transactions", "Budgets", "Accounts", "Recurring", "Reports"}
+var tabNames = []string{"Dashboard", "Transactions", "Budgets", "Accounts", "Recurring", "Reports", "Portfolio"}
 
 type App struct {
 	svc       *service.Service
@@ -34,12 +36,18 @@ type App struct {
 	accounts     AccountsModel
 	recurring    RecurringModel
 	reports      ReportsModel
+	portfolio    PortfolioModel
 
 	modal     tea.Model
 	showModal bool
 }
 
 func NewApp(svc *service.Service) *App {
+	db := svc.DB()
+	ps := equity.NewPriceService(db)
+	portSvc := equity.NewPortfolioService(db, ps)
+	grantSvc := equity.NewGrantService(db, ps, portSvc)
+
 	return &App{
 		svc:          svc,
 		dashboard:    NewDashboardModel(svc),
@@ -48,6 +56,7 @@ func NewApp(svc *service.Service) *App {
 		accounts:     NewAccountsModel(svc),
 		recurring:    NewRecurringModel(svc),
 		reports:      NewReportsModel(svc),
+		portfolio:    NewPortfolioModel(ps, portSvc, grantSvc),
 	}
 }
 
@@ -97,6 +106,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "6":
 			a.activeTab = TabReports
 			return a, a.reports.Init()
+		case "7":
+			a.activeTab = TabPortfolio
+			return a, a.portfolio.Init()
 		case "tab":
 			a.activeTab = (a.activeTab + 1) % Tab(len(tabNames))
 			return a, a.initActiveTab()
@@ -114,6 +126,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.accounts.SetSize(msg.Width, msg.Height-4)
 		a.recurring.SetSize(msg.Width, msg.Height-4)
 		a.reports.SetSize(msg.Width, msg.Height-4)
+		a.portfolio.SetSize(msg.Width, msg.Height-4)
 
 	case RefreshMsg:
 		return a, a.initActiveTab()
@@ -133,6 +146,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.recurring, cmd = a.recurring.Update(msg)
 	case TabReports:
 		a.reports, cmd = a.reports.Update(msg)
+	case TabPortfolio:
+		a.portfolio, cmd = a.portfolio.Update(msg)
 	}
 	return a, cmd
 }
@@ -151,6 +166,8 @@ func (a *App) initActiveTab() tea.Cmd {
 		return a.recurring.Init()
 	case TabReports:
 		return a.reports.Init()
+	case TabPortfolio:
+		return a.portfolio.Init()
 	}
 	return nil
 }
@@ -187,6 +204,8 @@ func (a *App) View() string {
 		content = a.recurring.View()
 	case TabReports:
 		content = a.reports.View()
+	case TabPortfolio:
+		content = a.portfolio.View()
 	}
 
 	// Status bar

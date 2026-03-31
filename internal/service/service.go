@@ -447,6 +447,10 @@ func (s *Service) AutoCategorize(payee string) *int64 {
 
 // --- Net Worth ---
 
+type EquityValueFunc func() (int64, error)
+
+var GetEquityValue EquityValueFunc
+
 func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
 	today := time.Now().Format("2006-01-02")
 	rows, err := s.db.Query("SELECT type, balance FROM accounts")
@@ -465,14 +469,18 @@ func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
 			assets += bal
 		}
 	}
-	nw := assets - liabilities
-	s.db.Exec(`INSERT OR REPLACE INTO networth_snapshots (date, total_assets, total_liabilities, net_worth) VALUES (?, ?, ?, ?)`,
-		today, assets, liabilities, nw)
-	return &model.NetWorthSnapshot{Date: today, TotalAssets: assets, TotalLiabilities: liabilities, NetWorth: nw}, nil
+	var equityValue int64
+	if GetEquityValue != nil {
+		equityValue, _ = GetEquityValue()
+	}
+	nw := assets - liabilities + equityValue
+	s.db.Exec(`INSERT OR REPLACE INTO networth_snapshots (date, total_assets, total_liabilities, equity_value, net_worth) VALUES (?, ?, ?, ?, ?)`,
+		today, assets, liabilities, equityValue, nw)
+	return &model.NetWorthSnapshot{Date: today, TotalAssets: assets, TotalLiabilities: liabilities, EquityValue: equityValue, NetWorth: nw}, nil
 }
 
 func (s *Service) GetNetWorthHistory(limit int) ([]model.NetWorthSnapshot, error) {
-	rows, err := s.db.Query("SELECT id, date, total_assets, total_liabilities, net_worth FROM networth_snapshots ORDER BY date DESC LIMIT ?", limit)
+	rows, err := s.db.Query("SELECT id, date, total_assets, total_liabilities, equity_value, net_worth FROM networth_snapshots ORDER BY date DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +488,7 @@ func (s *Service) GetNetWorthHistory(limit int) ([]model.NetWorthSnapshot, error
 	var snaps []model.NetWorthSnapshot
 	for rows.Next() {
 		var n model.NetWorthSnapshot
-		rows.Scan(&n.ID, &n.Date, &n.TotalAssets, &n.TotalLiabilities, &n.NetWorth)
+		rows.Scan(&n.ID, &n.Date, &n.TotalAssets, &n.TotalLiabilities, &n.EquityValue, &n.NetWorth)
 		snaps = append(snaps, n)
 	}
 	return snaps, nil

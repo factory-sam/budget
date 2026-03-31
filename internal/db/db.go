@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS networth_snapshots (
 	date TEXT NOT NULL UNIQUE,
 	total_assets INTEGER NOT NULL DEFAULT 0,
 	total_liabilities INTEGER NOT NULL DEFAULT 0,
+	equity_value INTEGER NOT NULL DEFAULT 0,
 	net_worth INTEGER NOT NULL DEFAULT 0
 );
 
@@ -120,6 +121,54 @@ CREATE TABLE IF NOT EXISTS auto_cat_rules (
 	pattern TEXT NOT NULL,
 	category_id INTEGER NOT NULL REFERENCES categories(id),
 	UNIQUE(pattern)
+);
+
+CREATE TABLE IF NOT EXISTS equity_prices (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	ticker TEXT NOT NULL,
+	date TEXT NOT NULL,
+	price INTEGER NOT NULL,
+	UNIQUE(ticker, date)
+);
+
+CREATE TABLE IF NOT EXISTS equity_lots (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	ticker TEXT NOT NULL,
+	shares REAL NOT NULL,
+	cost_basis INTEGER NOT NULL,
+	date_acquired TEXT NOT NULL,
+	source TEXT NOT NULL DEFAULT 'buy',
+	grant_id INTEGER,
+	include_in_networth INTEGER NOT NULL DEFAULT 1,
+	note TEXT NOT NULL DEFAULT '',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_equity_lots_ticker ON equity_lots(ticker);
+
+CREATE TABLE IF NOT EXISTS equity_grants (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	ticker TEXT NOT NULL,
+	grant_type TEXT NOT NULL,
+	total_shares REAL NOT NULL,
+	grant_date TEXT NOT NULL,
+	strike_price INTEGER,
+	expiration_date TEXT,
+	cliff_months INTEGER NOT NULL DEFAULT 12,
+	vesting_months INTEGER NOT NULL DEFAULT 48,
+	vesting_interval TEXT NOT NULL DEFAULT 'monthly',
+	note TEXT NOT NULL DEFAULT '',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS equity_vest_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	grant_id INTEGER NOT NULL REFERENCES equity_grants(id),
+	date TEXT NOT NULL,
+	shares REAL NOT NULL,
+	fmv_per_share INTEGER,
+	status TEXT NOT NULL DEFAULT 'pending',
+	lot_id INTEGER,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 `
 

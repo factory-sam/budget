@@ -71,6 +71,9 @@ var reportNetworthCmd = &cobra.Command{
 		fmt.Printf("Net Worth — %s\n\n", snap.Date)
 		fmt.Printf("  Assets:      $%.2f\n", float64(snap.TotalAssets)/100)
 		fmt.Printf("  Liabilities: $%.2f\n", float64(snap.TotalLiabilities)/100)
+		if snap.EquityValue > 0 {
+			fmt.Printf("  Equity:      $%.2f\n", float64(snap.EquityValue)/100)
+		}
 		fmt.Printf("  Net Worth:   $%.2f\n", float64(snap.NetWorth)/100)
 		return nil
 	},

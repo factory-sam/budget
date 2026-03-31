@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/sam/budget/internal/db"
+	"github.com/sam/budget/internal/equity"
 	svc "github.com/sam/budget/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -33,6 +34,10 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("seed categories: %w", err)
 		}
 		service = svc.New(database)
+		// wire up equity value for net worth
+		ps := equity.NewPriceService(database)
+		ps2 := equity.NewPortfolioService(database, ps)
+		svc.GetEquityValue = ps2.EquityValueForNetWorth
 		return nil
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {

@@ -104,6 +104,9 @@ func (d DashboardModel) renderNetWorth(w int) string {
 	s += "\n"
 	s += fmt.Sprintf("  Assets: $%.2f  |  Liabilities: $%.2f",
 		float64(nw.TotalAssets)/100, float64(nw.TotalLiabilities)/100)
+	if nw.EquityValue > 0 {
+		s += fmt.Sprintf("\n  Equity: $%.2f", float64(nw.EquityValue)/100)
+	}
 	return boxStyle.Width(w).Render(s)
 }
 
