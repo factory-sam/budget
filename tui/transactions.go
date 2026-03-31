@@ -182,17 +182,21 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 		case "t":
 			if len(t.txs) > 0 && t.cursor < len(t.txs) {
 				tx := t.txs[t.cursor]
+				// Only toggle between expense <-> transfer (both are outflows)
+				// Income stays as income — use 'c' to categorize instead
 				var newType model.TxType
 				switch tx.Type {
 				case model.TxExpense:
-					newType = model.TxIncome
-				case model.TxIncome:
 					newType = model.TxTransfer
 				case model.TxTransfer:
 					newType = model.TxExpense
+				default:
+					break
 				}
-				t.svc.UpdateTransactionType(tx.ID, newType)
-				return t, t.Init()
+				if newType != "" {
+					t.svc.UpdateTransactionType(tx.ID, newType)
+					return t, t.Init()
+				}
 			}
 		case "d":
 			if len(t.txs) > 0 && t.cursor < len(t.txs) {

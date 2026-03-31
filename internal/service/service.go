@@ -105,6 +105,34 @@ func (s *Service) UpdateAccountBalance(id int64, delta int64) error {
 	return err
 }
 
+func (s *Service) RecalculateAccountBalance(id int64) error {
+	// income adds to balance; expense and transfer subtract
+	var balance int64
+	err := s.db.QueryRow(`
+		SELECT COALESCE(
+			SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END),
+			0)
+		FROM transactions WHERE account_id = ?`, id).Scan(&balance)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec("UPDATE accounts SET balance = ?, updated_at = ? WHERE id = ?", balance, time.Now(), id)
+	return err
+}
+
+func (s *Service) RecalculateAllBalances() error {
+	accs, err := s.ListAccounts()
+	if err != nil {
+		return err
+	}
+	for _, a := range accs {
+		if err := s.RecalculateAccountBalance(a.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // --- Categories ---
 
 func (s *Service) ListCategories() ([]model.Category, error) {
@@ -320,36 +348,21 @@ func (s *Service) UpdateTransactionCategory(txID int64, categoryID *int64) error
 }
 
 func (s *Service) UpdateTransactionType(txID int64, newType model.TxType) error {
-	// Get current type and amount to adjust account balance
-	var accountID, amount int64
+	var accountID int64
 	var oldType string
-	err := s.db.QueryRow("SELECT account_id, amount, type FROM transactions WHERE id = ?", txID).
-		Scan(&accountID, &amount, &oldType)
+	err := s.db.QueryRow("SELECT account_id, type FROM transactions WHERE id = ?", txID).
+		Scan(&accountID, &oldType)
 	if err != nil {
 		return err
 	}
 	if model.TxType(oldType) == newType {
 		return nil
 	}
-
-	// Reverse old balance effect
-	switch model.TxType(oldType) {
-	case model.TxIncome:
-		s.UpdateAccountBalance(accountID, -amount)
-	case model.TxExpense, model.TxTransfer:
-		s.UpdateAccountBalance(accountID, amount)
-	}
-
-	// Apply new balance effect
-	switch newType {
-	case model.TxIncome:
-		s.UpdateAccountBalance(accountID, amount)
-	case model.TxExpense, model.TxTransfer:
-		s.UpdateAccountBalance(accountID, -amount)
-	}
-
 	_, err = s.db.Exec("UPDATE transactions SET type = ? WHERE id = ?", newType, txID)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.RecalculateAccountBalance(accountID)
 }
 
 // --- Budgets ---
