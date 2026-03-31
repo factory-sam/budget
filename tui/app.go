@@ -56,7 +56,7 @@ func NewApp(svc *service.Service) *App {
 		accounts:     NewAccountsModel(svc),
 		recurring:    NewRecurringModel(svc),
 		reports:      NewReportsModel(svc),
-		portfolio:    NewPortfolioModel(ps, portSvc, grantSvc),
+		portfolio:    NewPortfolioModel(ps, portSvc, grantSvc, svc),
 	}
 }
 
@@ -297,7 +297,7 @@ func (a *App) helpText() string {
 		}
 		switch a.portfolio.subView {
 		case PortfolioPositions:
-			return "j/k:navigate  a:buy  d:delete  g:grants  r:refresh  " + common
+			return "j/k:navigate  a:buy  d:delete  f:filter account  g:grants  r:refresh  " + common
 		case PortfolioGrants:
 			return "j/k:navigate  a:add grant  d:delete  v:vest  s:schedule  p:positions  " + common
 		case PortfolioVestSchedule:

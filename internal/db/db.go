@@ -29,8 +29,19 @@ func Open(path string) (*sql.DB, error) {
 }
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	// incremental migrations for existing databases
+	for _, m := range migrations {
+		db.Exec(m)
+	}
+	return nil
+}
+
+var migrations = []string{
+	"ALTER TABLE accounts ADD COLUMN tracking_mode TEXT NOT NULL DEFAULT 'holdings'",
+	"ALTER TABLE equity_lots ADD COLUMN account_id INTEGER REFERENCES accounts(id)",
 }
 
 const schema = `
@@ -158,6 +169,17 @@ CREATE TABLE IF NOT EXISTS equity_grants (
 	vesting_interval TEXT NOT NULL DEFAULT 'monthly',
 	note TEXT NOT NULL DEFAULT '',
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS contributions_401k (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	account_id INTEGER NOT NULL REFERENCES accounts(id),
+	year INTEGER NOT NULL,
+	employee_contrib INTEGER NOT NULL DEFAULT 0,
+	employer_match INTEGER NOT NULL DEFAULT 0,
+	match_percent REAL NOT NULL DEFAULT 0,
+	annual_limit INTEGER NOT NULL DEFAULT 2350000,
+	UNIQUE(account_id, year)
 );
 
 CREATE TABLE IF NOT EXISTS equity_vest_events (

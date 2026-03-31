@@ -22,53 +22,76 @@ func (s *Service) DB() *sql.DB { return s.db }
 // --- Accounts ---
 
 func (s *Service) CreateAccount(name string, typ model.AccountType, balanceCents int64) (*model.Account, error) {
+	return s.CreateAccountFull(name, typ, balanceCents, "holdings")
+}
+
+func (s *Service) CreateAccountFull(name string, typ model.AccountType, balanceCents int64, trackingMode string) (*model.Account, error) {
+	if trackingMode == "" {
+		trackingMode = "holdings"
+	}
 	now := time.Now()
 	res, err := s.db.Exec(
-		"INSERT INTO accounts (name, type, balance, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		name, typ, balanceCents, now, now,
+		"INSERT INTO accounts (name, type, balance, tracking_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+		name, typ, balanceCents, trackingMode, now, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create account: %w", err)
 	}
 	id, _ := res.LastInsertId()
-	return &model.Account{ID: id, Name: name, Type: typ, Balance: balanceCents, Currency: "USD", CreatedAt: now, UpdatedAt: now}, nil
+	return &model.Account{ID: id, Name: name, Type: typ, Balance: balanceCents, Currency: "USD", TrackingMode: trackingMode, CreatedAt: now, UpdatedAt: now}, nil
 }
 
+func scanAccount(scanner interface{ Scan(...interface{}) error }) (*model.Account, error) {
+	var a model.Account
+	err := scanner.Scan(&a.ID, &a.Name, &a.Type, &a.Balance, &a.Currency, &a.TrackingMode, &a.CreatedAt, &a.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+const accountCols = "id, name, type, balance, currency, tracking_mode, created_at, updated_at"
+
 func (s *Service) ListAccounts() ([]model.Account, error) {
-	rows, err := s.db.Query("SELECT id, name, type, balance, currency, created_at, updated_at FROM accounts ORDER BY name")
+	rows, err := s.db.Query("SELECT " + accountCols + " FROM accounts ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var accs []model.Account
 	for rows.Next() {
-		var a model.Account
-		if err := rows.Scan(&a.ID, &a.Name, &a.Type, &a.Balance, &a.Currency, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		a, err := scanAccount(rows)
+		if err != nil {
 			return nil, err
 		}
-		accs = append(accs, a)
+		accs = append(accs, *a)
 	}
 	return accs, nil
 }
 
 func (s *Service) GetAccount(id int64) (*model.Account, error) {
-	var a model.Account
-	err := s.db.QueryRow("SELECT id, name, type, balance, currency, created_at, updated_at FROM accounts WHERE id = ?", id).
-		Scan(&a.ID, &a.Name, &a.Type, &a.Balance, &a.Currency, &a.CreatedAt, &a.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &a, nil
+	return scanAccount(s.db.QueryRow("SELECT "+accountCols+" FROM accounts WHERE id = ?", id))
 }
 
 func (s *Service) GetAccountByName(name string) (*model.Account, error) {
-	var a model.Account
-	err := s.db.QueryRow("SELECT id, name, type, balance, currency, created_at, updated_at FROM accounts WHERE LOWER(name) = LOWER(?)", name).
-		Scan(&a.ID, &a.Name, &a.Type, &a.Balance, &a.Currency, &a.CreatedAt, &a.UpdatedAt)
+	return scanAccount(s.db.QueryRow("SELECT "+accountCols+" FROM accounts WHERE LOWER(name) = LOWER(?)", name))
+}
+
+func (s *Service) ListInvestmentAccounts() ([]model.Account, error) {
+	rows, err := s.db.Query("SELECT "+accountCols+" FROM accounts WHERE type IN ('investment','brokerage','401k','managed') ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
-	return &a, nil
+	defer rows.Close()
+	var accs []model.Account
+	for rows.Next() {
+		a, err := scanAccount(rows)
+		if err != nil {
+			return nil, err
+		}
+		accs = append(accs, *a)
+	}
+	return accs, nil
 }
 
 func (s *Service) DeleteAccount(id int64) error {
@@ -583,4 +606,60 @@ func (s *Service) CashFlowReport(from, to string) ([]CashFlowReport, error) {
 		results = append(results, *v)
 	}
 	return results, nil
+}
+
+// --- 401k Contributions ---
+
+func (s *Service) Contribute401k(accountID int64, year int, employeeAmount, employerMatch int64) (*model.Contribution401k, error) {
+	_, err := s.db.Exec(`
+		INSERT INTO contributions_401k (account_id, year, employee_contrib, employer_match)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(account_id, year) DO UPDATE SET
+			employee_contrib = employee_contrib + excluded.employee_contrib,
+			employer_match = employer_match + excluded.employer_match`,
+		accountID, year, employeeAmount, employerMatch)
+	if err != nil {
+		return nil, err
+	}
+	return s.Get401kStatus(accountID, year)
+}
+
+func (s *Service) Get401kStatus(accountID int64, year int) (*model.Contribution401k, error) {
+	var c model.Contribution401k
+	err := s.db.QueryRow(`
+		SELECT c.id, c.account_id, COALESCE(a.name,''), c.year, c.employee_contrib, c.employer_match, c.match_percent, c.annual_limit
+		FROM contributions_401k c
+		LEFT JOIN accounts a ON c.account_id = a.id
+		WHERE c.account_id = ? AND c.year = ?`, accountID, year).
+		Scan(&c.ID, &c.AccountID, &c.AccountName, &c.Year, &c.EmployeeContrib, &c.EmployerMatch, &c.MatchPercent, &c.AnnualLimit)
+	if err != nil {
+		return &model.Contribution401k{AccountID: accountID, Year: year, AnnualLimit: 2350000}, nil
+	}
+	c.TotalContrib = c.EmployeeContrib + c.EmployerMatch
+	c.Remaining = c.AnnualLimit - c.EmployeeContrib
+	if c.Remaining < 0 {
+		c.Remaining = 0
+	}
+	if c.AnnualLimit > 0 {
+		c.Percent = float64(c.EmployeeContrib) / float64(c.AnnualLimit) * 100
+	}
+	return &c, nil
+}
+
+func (s *Service) Set401kMatchPercent(accountID int64, year int, pct float64) error {
+	_, err := s.db.Exec(`
+		INSERT INTO contributions_401k (account_id, year, match_percent)
+		VALUES (?, ?, ?)
+		ON CONFLICT(account_id, year) DO UPDATE SET match_percent = excluded.match_percent`,
+		accountID, year, pct)
+	return err
+}
+
+func (s *Service) Set401kAnnualLimit(accountID int64, year int, limitCents int64) error {
+	_, err := s.db.Exec(`
+		INSERT INTO contributions_401k (account_id, year, annual_limit)
+		VALUES (?, ?, ?)
+		ON CONFLICT(account_id, year) DO UPDATE SET annual_limit = excluded.annual_limit`,
+		accountID, year, limitCents)
+	return err
 }

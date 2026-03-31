@@ -80,12 +80,17 @@ func (a *AccountsModel) newAddForm() FormModel {
 	svc := a.svc
 	return NewForm("Add Account", []FormField{
 		{Label: "Name", Placeholder: "e.g. Chase Checking"},
-		{Label: "Type", Value: "checking", Options: []string{"checking", "savings", "credit_card", "investment", "loan", "cash"}},
+		{Label: "Type", Value: "checking", Options: []string{
+			"checking", "savings", "credit_card", "investment", "loan", "cash",
+			"brokerage", "401k", "money_market", "managed",
+		}},
 		{Label: "Balance", Placeholder: "0.00"},
+		{Label: "Tracking", Value: "holdings", Options: []string{"holdings", "balance"}},
 	}, func(fields []FormField) (tea.Cmd, string) {
 		name := strings.TrimSpace(fields[0].Value)
 		typ := fields[1].Value
 		balStr := strings.TrimSpace(fields[2].Value)
+		trackingMode := fields[3].Value
 		if name == "" {
 			return nil, "Name is required"
 		}
@@ -98,7 +103,7 @@ func (a *AccountsModel) newAddForm() FormModel {
 			}
 		}
 		cents := int64(math.Round(bal * 100))
-		_, err := svc.CreateAccount(name, model.AccountType(typ), cents)
+		_, err := svc.CreateAccountFull(name, model.AccountType(typ), cents, trackingMode)
 		if err != nil {
 			return nil, fmt.Sprintf("Error: %v", err)
 		}

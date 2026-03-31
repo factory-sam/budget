@@ -217,7 +217,7 @@ func (g *GrantService) VestGrant(grantID int64, fmvOverride *int64) (int, error)
 		if grant.GrantType == "rsu" {
 			// RSU: auto-create lot at FMV
 			costBasis := int64(math.Round(float64(fmv) * e.shares))
-			lot, err := g.portfolio.CreateLot(grant.Ticker, e.shares, costBasis, e.date, "rsu_vest", &grantID, "")
+			lot, err := g.portfolio.CreateLot(nil, grant.Ticker, e.shares, costBasis, e.date, "rsu_vest", &grantID, "")
 			if err != nil {
 				return count, err
 			}
@@ -265,7 +265,7 @@ func (g *GrantService) ExerciseISO(vestEventID int64, fmvAtExerciseCents int64) 
 		float64(fmvAtExerciseCents)/100,
 		float64(fmvAtExerciseCents-*grant.StrikePrice)*e.Shares/100)
 
-	lot, err := g.portfolio.CreateLot(grant.Ticker, e.Shares, costBasis, today, "iso_exercise", &grantID, note)
+	lot, err := g.portfolio.CreateLot(nil, grant.Ticker, e.Shares, costBasis, today, "iso_exercise", &grantID, note)
 	if err != nil {
 		return nil, err
 	}

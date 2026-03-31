@@ -24,11 +24,12 @@ var accountAddCmd = &cobra.Command{
 		name, _ := cmd.Flags().GetString("name")
 		typ, _ := cmd.Flags().GetString("type")
 		balance, _ := cmd.Flags().GetFloat64("balance")
+		tracking, _ := cmd.Flags().GetString("tracking")
 		if name == "" {
 			return fmt.Errorf("--name is required")
 		}
 		cents := int64(math.Round(balance * 100))
-		acc, err := service.CreateAccount(name, model.AccountType(typ), cents)
+		acc, err := service.CreateAccountFull(name, model.AccountType(typ), cents, tracking)
 		if err != nil {
 			return err
 		}
@@ -81,7 +82,8 @@ var accountDeleteCmd = &cobra.Command{
 
 func init() {
 	accountAddCmd.Flags().String("name", "", "account name")
-	accountAddCmd.Flags().String("type", "checking", "account type (checking, savings, credit_card, investment, loan, cash)")
+	accountAddCmd.Flags().String("type", "checking", "account type (checking, savings, credit_card, investment, loan, cash, brokerage, 401k, money_market, managed)")
+	accountAddCmd.Flags().String("tracking", "holdings", "tracking mode for managed accounts (holdings, balance)")
 	accountAddCmd.Flags().Float64("balance", 0, "starting balance")
 	accountAddCmd.Flags().String("format", "table", "output format (table, json)")
 

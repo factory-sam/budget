@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sam/budget/internal/equity"
+	"github.com/sam/budget/internal/importer"
 	"github.com/sam/budget/internal/model"
 	"github.com/spf13/cobra"
 )
@@ -47,6 +48,8 @@ var equityBuyCmd = &cobra.Command{
 		date, _ := cmd.Flags().GetString("date")
 		note, _ := cmd.Flags().GetString("note")
 
+		accountName, _ := cmd.Flags().GetString("account")
+
 		if ticker == "" || shares == 0 || price == 0 {
 			return fmt.Errorf("--ticker, --shares, and --price are required")
 		}
@@ -56,7 +59,16 @@ var equityBuyCmd = &cobra.Command{
 		ticker = strings.ToUpper(ticker)
 		priceCents := int64(math.Round(price * 100))
 
-		lot, err := portfolioSvc.BuyLot(ticker, shares, priceCents, date, note)
+		var accountID *int64
+		if accountName != "" {
+			acc, err := service.GetAccountByName(accountName)
+			if err != nil {
+				return fmt.Errorf("account not found: %s", accountName)
+			}
+			accountID = &acc.ID
+		}
+
+		lot, err := portfolioSvc.BuyLot(accountID, ticker, shares, priceCents, date, note)
 		if err != nil {
 			return err
 		}
@@ -101,8 +113,18 @@ var equityLotsCmd = &cobra.Command{
 		initEquityServices()
 		ticker, _ := cmd.Flags().GetString("ticker")
 		ticker = strings.ToUpper(ticker)
+		accountName, _ := cmd.Flags().GetString("account")
 
-		lots, err := portfolioSvc.ListLots(ticker)
+		var accountID *int64
+		if accountName != "" {
+			acc, err := service.GetAccountByName(accountName)
+			if err != nil {
+				return fmt.Errorf("account not found: %s", accountName)
+			}
+			accountID = &acc.ID
+		}
+
+		lots, err := portfolioSvc.ListLots(ticker, accountID)
 		if err != nil {
 			return err
 		}
@@ -118,15 +140,19 @@ var equityLotsCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tTICKER\tSHARES\tCOST BASIS\tACQUIRED\tSOURCE\tVALUE\tGAIN/LOSS\tNW")
+		fmt.Fprintln(w, "ID\tTICKER\tSHARES\tCOST BASIS\tACQUIRED\tSOURCE\tACCOUNT\tVALUE\tGAIN/LOSS\tNW")
 		for _, l := range lots {
 			nw := " "
 			if l.IncludeInNetWorth {
 				nw = "*"
 			}
-			fmt.Fprintf(w, "%d\t%s\t%.4f\t$%.2f\t%s\t%s\t$%.2f\t%+.2f (%.1f%%)\t%s\n",
+			accName := l.AccountName
+			if accName == "" {
+				accName = "—"
+			}
+			fmt.Fprintf(w, "%d\t%s\t%.4f\t$%.2f\t%s\t%s\t%s\t$%.2f\t%+.2f (%.1f%%)\t%s\n",
 				l.ID, l.Ticker, l.Shares, float64(l.CostBasis)/100,
-				l.DateAcquired, l.Source,
+				l.DateAcquired, l.Source, accName,
 				float64(l.MarketValue)/100, float64(l.GainLoss)/100, l.GainPct, nw)
 		}
 		return w.Flush()
@@ -140,11 +166,22 @@ var equityPortfolioCmd = &cobra.Command{
 	Short: "Show portfolio summary",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		initEquityServices()
+		accountName, _ := cmd.Flags().GetString("account")
+
+		var accountID *int64
+		if accountName != "" {
+			acc, err := service.GetAccountByName(accountName)
+			if err != nil {
+				return fmt.Errorf("account not found: %s", accountName)
+			}
+			accountID = &acc.ID
+		}
+
 		// refresh prices first
 		tickers, _ := portfolioSvc.GetDistinctTickers()
 		pricesSvc.FetchPrices(tickers)
 
-		portfolio, err := portfolioSvc.GetPortfolio()
+		portfolio, err := portfolioSvc.GetPortfolio(accountID)
 		if err != nil {
 			return err
 		}
@@ -475,20 +512,67 @@ var equityExcludeCmd = &cobra.Command{
 	},
 }
 
+// --- import ---
+
+var equityImportCmd = &cobra.Command{
+	Use:   "import [csv-file]",
+	Short: "Import portfolio transactions from a brokerage CSV",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		initEquityServices()
+		accountName, _ := cmd.Flags().GetString("account")
+
+		var accountID *int64
+		if accountName != "" {
+			acc, err := service.GetAccountByName(accountName)
+			if err != nil {
+				return fmt.Errorf("account not found: %s", accountName)
+			}
+			accountID = &acc.ID
+		}
+
+		imp := importer.NewEquityCSV(service, portfolioSvc)
+		result, err := imp.Import(args[0], accountID)
+		if err != nil {
+			return err
+		}
+
+		format, _ := cmd.Flags().GetString("format")
+		if format == "json" {
+			return json.NewEncoder(os.Stdout).Encode(result)
+		}
+
+		fmt.Println(result)
+		if len(result.Errors) > 0 {
+			fmt.Printf("\n%d errors:\n", len(result.Errors))
+			for _, e := range result.Errors {
+				fmt.Printf("  - %s\n", e)
+			}
+		}
+		return nil
+	},
+}
+
 func init() {
+	equityImportCmd.Flags().String("account", "", "investment account to link lots to")
+	equityImportCmd.Flags().String("format", "table", "output format")
+
 	equityBuyCmd.Flags().String("ticker", "", "stock ticker symbol")
 	equityBuyCmd.Flags().Float64("shares", 0, "number of shares")
 	equityBuyCmd.Flags().Float64("price", 0, "price per share")
 	equityBuyCmd.Flags().String("date", "", "purchase date (YYYY-MM-DD)")
 	equityBuyCmd.Flags().String("note", "", "optional note")
+	equityBuyCmd.Flags().String("account", "", "investment account name")
 	equityBuyCmd.Flags().String("format", "table", "output format")
 
 	equitySellCmd.Flags().Int64("lot", 0, "lot ID to sell from")
 	equitySellCmd.Flags().Float64("shares", 0, "shares to sell")
 
 	equityLotsCmd.Flags().String("ticker", "", "filter by ticker")
+	equityLotsCmd.Flags().String("account", "", "filter by account name")
 	equityLotsCmd.Flags().String("format", "table", "output format")
 
+	equityPortfolioCmd.Flags().String("account", "", "filter by account name")
 	equityPortfolioCmd.Flags().String("format", "table", "output format")
 
 	equityPriceCmd.Flags().String("format", "table", "output format")
@@ -517,6 +601,6 @@ func init() {
 	equityGrantCmd.AddCommand(equityGrantAddCmd, equityGrantListCmd, equityGrantDeleteCmd)
 	equityCmd.AddCommand(equityBuyCmd, equitySellCmd, equityLotsCmd, equityPortfolioCmd,
 		equityPriceCmd, equityGrantCmd, equityVestCmd, equityVestScheduleCmd,
-		equityExerciseCmd, equityIncludeCmd, equityExcludeCmd)
+		equityExerciseCmd, equityIncludeCmd, equityExcludeCmd, equityImportCmd)
 	rootCmd.AddCommand(equityCmd)
 }

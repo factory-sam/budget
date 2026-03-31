@@ -5,20 +5,32 @@ import "time"
 type AccountType string
 
 const (
-	AccountChecking   AccountType = "checking"
-	AccountSavings    AccountType = "savings"
-	AccountCreditCard AccountType = "credit_card"
-	AccountInvestment AccountType = "investment"
-	AccountLoan       AccountType = "loan"
-	AccountCash       AccountType = "cash"
+	AccountChecking    AccountType = "checking"
+	AccountSavings     AccountType = "savings"
+	AccountCreditCard  AccountType = "credit_card"
+	AccountInvestment  AccountType = "investment"
+	AccountLoan        AccountType = "loan"
+	AccountCash        AccountType = "cash"
+	AccountBrokerage   AccountType = "brokerage"
+	Account401k        AccountType = "401k"
+	AccountMoneyMarket AccountType = "money_market"
+	AccountManaged     AccountType = "managed"
 )
 
 func ValidAccountTypes() []AccountType {
-	return []AccountType{AccountChecking, AccountSavings, AccountCreditCard, AccountInvestment, AccountLoan, AccountCash}
+	return []AccountType{
+		AccountChecking, AccountSavings, AccountCreditCard, AccountInvestment,
+		AccountLoan, AccountCash, AccountBrokerage, Account401k,
+		AccountMoneyMarket, AccountManaged,
+	}
 }
 
 func IsLiability(t AccountType) bool {
 	return t == AccountCreditCard || t == AccountLoan
+}
+
+func IsInvestmentAccount(t AccountType) bool {
+	return t == AccountInvestment || t == AccountBrokerage || Account401k == t || t == AccountManaged
 }
 
 type TxType string
@@ -39,13 +51,14 @@ const (
 )
 
 type Account struct {
-	ID        int64       `json:"id"`
-	Name      string      `json:"name"`
-	Type      AccountType `json:"type"`
-	Balance   int64       `json:"balance"` // cents
-	Currency  string      `json:"currency"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	ID           int64       `json:"id"`
+	Name         string      `json:"name"`
+	Type         AccountType `json:"type"`
+	Balance      int64       `json:"balance"` // cents
+	Currency     string      `json:"currency"`
+	TrackingMode string      `json:"tracking_mode"` // holdings, balance (for managed accounts)
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
 }
 
 type CategoryGroup struct {
@@ -137,6 +150,8 @@ type EquityPrice struct {
 
 type EquityLot struct {
 	ID                int64   `json:"id"`
+	AccountID         *int64  `json:"account_id,omitempty"`
+	AccountName       string  `json:"account_name,omitempty"`
 	Ticker            string  `json:"ticker"`
 	Shares            float64 `json:"shares"`
 	CostBasis         int64   `json:"cost_basis"` // total cents for this lot
@@ -196,6 +211,21 @@ type PortfolioSummary struct {
 	TotalCostBasis int64           `json:"total_cost_basis"`
 	TotalGainLoss int64            `json:"total_gain_loss"`
 	Positions     []PositionSummary `json:"positions"`
+}
+
+type Contribution401k struct {
+	ID              int64   `json:"id"`
+	AccountID       int64   `json:"account_id"`
+	AccountName     string  `json:"account_name,omitempty"`
+	Year            int     `json:"year"`
+	EmployeeContrib int64   `json:"employee_contrib"` // cents YTD
+	EmployerMatch   int64   `json:"employer_match"`   // cents YTD
+	MatchPercent    float64 `json:"match_percent"`
+	AnnualLimit     int64   `json:"annual_limit"` // cents
+	// computed
+	TotalContrib int64   `json:"total_contrib"`
+	Remaining    int64   `json:"remaining"`
+	Percent      float64 `json:"percent"`
 }
 
 type TxFilter struct {

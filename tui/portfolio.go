@@ -25,26 +25,40 @@ type PortfolioModel struct {
 	prices    *equity.PriceService
 	portfolio *equity.PortfolioService
 	grants    *equity.GrantService
+	svc       interface {
+		ListInvestmentAccounts() ([]model.Account, error)
+		GetAccountByName(string) (*model.Account, error)
+		Get401kStatus(int64, int) (*model.Contribution401k, error)
+	}
 
-	width, height int
-	summary       *model.PortfolioSummary
-	grantList     []model.EquityGrant
-	vestEvents    []model.VestEvent
-	vestGrantID   int64
-	cursor        int
-	subView       PortfolioSubView
-	refreshing    bool
-	form          FormModel
-	statusMsg     string
+	width, height   int
+	summary         *model.PortfolioSummary
+	grantList       []model.EquityGrant
+	vestEvents      []model.VestEvent
+	vestGrantID     int64
+	cursor          int
+	subView         PortfolioSubView
+	refreshing      bool
+	form            FormModel
+	statusMsg       string
+	// account filter
+	investAccounts  []model.Account
+	filterIdx       int // 0 = All, 1..N = specific account
+	filterAccountID *int64
 }
 
 func (p PortfolioModel) InputActive() bool { return p.form.Active() }
 
-func NewPortfolioModel(prices *equity.PriceService, portfolio *equity.PortfolioService, grants *equity.GrantService) PortfolioModel {
+func NewPortfolioModel(prices *equity.PriceService, portfolio *equity.PortfolioService, grants *equity.GrantService, svc interface {
+	ListInvestmentAccounts() ([]model.Account, error)
+	GetAccountByName(string) (*model.Account, error)
+	Get401kStatus(int64, int) (*model.Contribution401k, error)
+}) PortfolioModel {
 	return PortfolioModel{
 		prices:    prices,
 		portfolio: portfolio,
 		grants:    grants,
+		svc:       svc,
 	}
 }
 
@@ -55,12 +69,22 @@ type portfolioDataMsg struct {
 
 type priceRefreshDoneMsg struct{}
 
+type investAccountsMsg struct {
+	accounts []model.Account
+}
+
 func (p PortfolioModel) Init() tea.Cmd {
-	return func() tea.Msg {
-		summary, _ := p.portfolio.GetPortfolio()
-		grants, _ := p.grants.ListGrants()
-		return portfolioDataMsg{summary, grants}
-	}
+	return tea.Batch(
+		func() tea.Msg {
+			summary, _ := p.portfolio.GetPortfolio(p.filterAccountID)
+			grants, _ := p.grants.ListGrants()
+			return portfolioDataMsg{summary, grants}
+		},
+		func() tea.Msg {
+			accs, _ := p.svc.ListInvestmentAccounts()
+			return investAccountsMsg{accs}
+		},
+	)
 }
 
 func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
@@ -71,6 +95,9 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case investAccountsMsg:
+		p.investAccounts = msg.accounts
+
 	case portfolioDataMsg:
 		if msg.summary != nil {
 			p.summary = msg.summary
@@ -119,6 +146,19 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 			maxLen := p.currentListLen()
 			if maxLen > 0 {
 				p.cursor = maxLen - 1
+			}
+		case "f":
+			if p.subView == PortfolioPositions && len(p.investAccounts) > 0 {
+				p.filterIdx = (p.filterIdx + 1) % (len(p.investAccounts) + 1)
+				if p.filterIdx == 0 {
+					p.filterAccountID = nil
+				} else {
+					p.filterAccountID = &p.investAccounts[p.filterIdx-1].ID
+				}
+				return p, func() tea.Msg {
+					summary, _ := p.portfolio.GetPortfolio(p.filterAccountID)
+					return portfolioDataMsg{summary, nil}
+				}
 			}
 		case "a":
 			switch p.subView {
@@ -241,18 +281,22 @@ func (p PortfolioModel) currentListLen() int {
 func (p *PortfolioModel) newBuyForm() FormModel {
 	ps := p.portfolio
 	priceSvc := p.prices
+	svc := p.svc
+	filterAccID := p.filterAccountID
 	return NewForm("Buy Stock", []FormField{
 		{Label: "Ticker", Placeholder: "e.g. AAPL"},
 		{Label: "Shares", Placeholder: "e.g. 10"},
 		{Label: "Price/Share", Placeholder: "e.g. 185.50"},
+		{Label: "Account", Placeholder: "e.g. Schwab Brokerage (optional)"},
 		{Label: "Date", Value: time.Now().Format("2006-01-02")},
 		{Label: "Note", Placeholder: "optional"},
 	}, func(fields []FormField) (tea.Cmd, string) {
 		ticker := strings.ToUpper(strings.TrimSpace(fields[0].Value))
 		sharesStr := strings.TrimSpace(fields[1].Value)
 		priceStr := strings.TrimSpace(fields[2].Value)
-		date := strings.TrimSpace(fields[3].Value)
-		note := strings.TrimSpace(fields[4].Value)
+		accName := strings.TrimSpace(fields[3].Value)
+		date := strings.TrimSpace(fields[4].Value)
+		note := strings.TrimSpace(fields[5].Value)
 
 		if ticker == "" {
 			return nil, "Ticker is required"
@@ -275,13 +319,21 @@ func (p *PortfolioModel) newBuyForm() FormModel {
 			date = time.Now().Format("2006-01-02")
 		}
 
+		var accountID *int64
+		if accName != "" {
+			acc, err := svc.GetAccountByName(accName)
+			if err != nil {
+				return nil, fmt.Sprintf("Account %q not found", accName)
+			}
+			accountID = &acc.ID
+		}
+
 		priceCents := int64(math.Round(price * 100))
-		ps.BuyLot(ticker, shares, priceCents, date, note)
-		// refresh price cache for new ticker
+		ps.BuyLot(accountID, ticker, shares, priceCents, date, note)
 		priceSvc.FetchPrice(ticker)
 
 		return func() tea.Msg {
-			summary, _ := ps.GetPortfolio()
+			summary, _ := ps.GetPortfolio(filterAccID)
 			return portfolioDataMsg{summary, nil}
 		}, ""
 	})
@@ -448,6 +500,12 @@ func (p PortfolioModel) View() string {
 
 func (p PortfolioModel) viewPositions() string {
 	var sb strings.Builder
+
+	// Show active filter
+	if p.filterAccountID != nil && p.filterIdx > 0 && p.filterIdx <= len(p.investAccounts) {
+		sb.WriteString(lipgloss.NewStyle().Foreground(highlight).Render(
+			fmt.Sprintf("  Filter: %s", p.investAccounts[p.filterIdx-1].Name)) + "\n")
+	}
 
 	if p.summary == nil || len(p.summary.Positions) == 0 {
 		sb.WriteString("  No positions. Press 'a' to buy stock.\n")

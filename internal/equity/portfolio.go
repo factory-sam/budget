@@ -20,31 +20,31 @@ func NewPortfolioService(db *sql.DB, prices *PriceService) *PortfolioService {
 
 // --- Lot CRUD ---
 
-func (p *PortfolioService) BuyLot(ticker string, shares float64, pricePerShareCents int64, date, note string) (*model.EquityLot, error) {
+func (p *PortfolioService) BuyLot(accountID *int64, ticker string, shares float64, pricePerShareCents int64, date, note string) (*model.EquityLot, error) {
 	costBasis := int64(math.Round(float64(pricePerShareCents) * shares))
 	res, err := p.db.Exec(
-		"INSERT INTO equity_lots (ticker, shares, cost_basis, date_acquired, source, note) VALUES (?, ?, ?, ?, 'buy', ?)",
-		ticker, shares, costBasis, date, note)
+		"INSERT INTO equity_lots (account_id, ticker, shares, cost_basis, date_acquired, source, note) VALUES (?, ?, ?, ?, ?, 'buy', ?)",
+		accountID, ticker, shares, costBasis, date, note)
 	if err != nil {
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
 	return &model.EquityLot{
-		ID: id, Ticker: ticker, Shares: shares, CostBasis: costBasis,
+		ID: id, AccountID: accountID, Ticker: ticker, Shares: shares, CostBasis: costBasis,
 		DateAcquired: date, Source: "buy", Note: note, IncludeInNetWorth: true,
 	}, nil
 }
 
-func (p *PortfolioService) CreateLot(ticker string, shares float64, costBasis int64, date, source string, grantID *int64, note string) (*model.EquityLot, error) {
+func (p *PortfolioService) CreateLot(accountID *int64, ticker string, shares float64, costBasis int64, date, source string, grantID *int64, note string) (*model.EquityLot, error) {
 	res, err := p.db.Exec(
-		"INSERT INTO equity_lots (ticker, shares, cost_basis, date_acquired, source, grant_id, note) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		ticker, shares, costBasis, date, source, grantID, note)
+		"INSERT INTO equity_lots (account_id, ticker, shares, cost_basis, date_acquired, source, grant_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		accountID, ticker, shares, costBasis, date, source, grantID, note)
 	if err != nil {
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
 	return &model.EquityLot{
-		ID: id, Ticker: ticker, Shares: shares, CostBasis: costBasis,
+		ID: id, AccountID: accountID, Ticker: ticker, Shares: shares, CostBasis: costBasis,
 		DateAcquired: date, Source: source, GrantID: grantID, Note: note, IncludeInNetWorth: true,
 	}, nil
 }
@@ -66,14 +66,20 @@ func (p *PortfolioService) SellLot(lotID int64, sharesToSell float64) error {
 	return err
 }
 
-func (p *PortfolioService) ListLots(ticker string) ([]model.EquityLot, error) {
-	q := "SELECT id, ticker, shares, cost_basis, date_acquired, source, grant_id, include_in_networth, note FROM equity_lots"
+func (p *PortfolioService) ListLots(ticker string, accountID *int64) ([]model.EquityLot, error) {
+	q := `SELECT l.id, l.account_id, COALESCE(a.name,''), l.ticker, l.shares, l.cost_basis,
+		l.date_acquired, l.source, l.grant_id, l.include_in_networth, l.note
+		FROM equity_lots l LEFT JOIN accounts a ON l.account_id = a.id WHERE 1=1`
 	var args []interface{}
 	if ticker != "" {
-		q += " WHERE UPPER(ticker) = UPPER(?)"
+		q += " AND UPPER(l.ticker) = UPPER(?)"
 		args = append(args, ticker)
 	}
-	q += " ORDER BY ticker, date_acquired"
+	if accountID != nil {
+		q += " AND l.account_id = ?"
+		args = append(args, *accountID)
+	}
+	q += " ORDER BY l.ticker, l.date_acquired"
 
 	rows, err := p.db.Query(q, args...)
 	if err != nil {
@@ -85,10 +91,10 @@ func (p *PortfolioService) ListLots(ticker string) ([]model.EquityLot, error) {
 	for rows.Next() {
 		var l model.EquityLot
 		var inclNW int
-		rows.Scan(&l.ID, &l.Ticker, &l.Shares, &l.CostBasis, &l.DateAcquired, &l.Source, &l.GrantID, &inclNW, &l.Note)
+		rows.Scan(&l.ID, &l.AccountID, &l.AccountName, &l.Ticker, &l.Shares, &l.CostBasis,
+			&l.DateAcquired, &l.Source, &l.GrantID, &inclNW, &l.Note)
 		l.IncludeInNetWorth = inclNW == 1
 
-		// enrich with current price
 		price, err := p.prices.GetCachedPrice(l.Ticker)
 		if err == nil && price > 0 {
 			l.CurrentPrice = price
@@ -114,8 +120,8 @@ func (p *PortfolioService) SetNetWorthInclusion(lotID int64, include bool) error
 
 // --- Portfolio Aggregation ---
 
-func (p *PortfolioService) GetPortfolio() (*model.PortfolioSummary, error) {
-	lots, err := p.ListLots("")
+func (p *PortfolioService) GetPortfolio(accountID *int64) (*model.PortfolioSummary, error) {
+	lots, err := p.ListLots("", accountID)
 	if err != nil {
 		return nil, err
 	}
