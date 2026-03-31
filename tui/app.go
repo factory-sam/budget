@@ -297,7 +297,7 @@ func (a *App) helpText() string {
 		}
 		switch a.portfolio.subView {
 		case PortfolioPositions:
-			return "j/k:navigate  a:buy  d:delete  f:filter account  g:grants  r:refresh  " + common
+			return "j/k:navigate  a:buy  d:delete  l:lots  f:filter account  g:grants  r:refresh  " + common
 		case PortfolioGrants:
 			return "j/k:navigate  a:add grant  d:delete  v:vest  s:schedule  p:positions  " + common
 		case PortfolioVestSchedule:

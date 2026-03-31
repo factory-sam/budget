@@ -41,6 +41,7 @@ type PortfolioModel struct {
 	refreshing      bool
 	form            FormModel
 	statusMsg       string
+	lotsExpanded    bool // whether to show individual lots for selected position
 	// account filter
 	investAccounts  []model.Account
 	filterIdx       int // 0 = All, 1..N = specific account
@@ -146,6 +147,10 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 			maxLen := p.currentListLen()
 			if maxLen > 0 {
 				p.cursor = maxLen - 1
+			}
+		case "l":
+			if p.subView == PortfolioPositions {
+				p.lotsExpanded = !p.lotsExpanded
 			}
 		case "f":
 			if p.subView == PortfolioPositions && len(p.investAccounts) > 0 {
@@ -565,12 +570,29 @@ func (p PortfolioModel) viewPositions() string {
 		}
 		sb.WriteString(line + "\n")
 
-		// show lots if selected
-		if i == p.cursor && len(pos.Lots) > 1 {
-			for _, lot := range pos.Lots {
-				sb.WriteString(fmt.Sprintf("    └ lot#%d  %.4f sh  $%.2f basis  %s  %s\n",
-					lot.ID, lot.Shares, float64(lot.CostBasis)/100, lot.DateAcquired, lot.Source))
+		// show lots if expanded and selected
+		if i == p.cursor && p.lotsExpanded && len(pos.Lots) > 0 {
+			for j, lot := range pos.Lots {
+				prefix := "├"
+				if j == len(pos.Lots)-1 {
+					prefix = "└"
+				}
+				lotGL := ""
+				if lot.GainLoss != 0 {
+					lotGLStyle := greenStyle
+					lotGLSign := "+"
+					if lot.GainLoss < 0 {
+						lotGLStyle = redStyle
+						lotGLSign = ""
+					}
+					lotGL = "  " + lotGLStyle.Render(fmt.Sprintf("%s$%.2f", lotGLSign, float64(lot.GainLoss)/100))
+				}
+				sb.WriteString(fmt.Sprintf("    %s lot#%d  %.4f sh  $%.2f basis  %s  %s%s\n",
+					prefix, lot.ID, lot.Shares, float64(lot.CostBasis)/100, lot.DateAcquired, lot.Source, lotGL))
 			}
+		} else if i == p.cursor && len(pos.Lots) > 1 {
+			sb.WriteString(lipgloss.NewStyle().Foreground(muted).Render(
+				fmt.Sprintf("    %d lots — press 'l' to expand", len(pos.Lots))) + "\n")
 		}
 	}
 
