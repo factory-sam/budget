@@ -12,7 +12,7 @@ import (
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".budget")
-	os.MkdirAll(dir, 0755)
+	_ = os.MkdirAll(dir, 0755)
 	return filepath.Join(dir, "budget.db")
 }
 
@@ -33,7 +33,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	for _, m := range migrations {
-		db.Exec(m)
+		_, _ = db.Exec(m) // idempotent ALTER TABLE; errors expected on re-run
 	}
 	migrateCategories(db)
 	return nil
@@ -53,9 +53,9 @@ func migrateCategories(db *sql.DB) {
 	err := db.QueryRow("SELECT id FROM category_groups WHERE name = 'Income'").Scan(&incomeGroupID)
 	if err == nil {
 		var exists int
-		db.QueryRow("SELECT COUNT(*) FROM categories WHERE group_id = ? AND name = 'Dividend Income'", incomeGroupID).Scan(&exists)
+		_ = db.QueryRow("SELECT COUNT(*) FROM categories WHERE group_id = ? AND name = 'Dividend Income'", incomeGroupID).Scan(&exists)
 		if exists == 0 {
-			db.Exec("INSERT INTO categories (group_id, name, sort_order) VALUES (?, 'Dividend Income', 3)", incomeGroupID)
+			_, _ = db.Exec("INSERT INTO categories (group_id, name, sort_order) VALUES (?, 'Dividend Income', 3)", incomeGroupID)
 		}
 	}
 	// Add "Credit Card Payment" to Transfers group
@@ -63,9 +63,9 @@ func migrateCategories(db *sql.DB) {
 	err = db.QueryRow("SELECT id FROM category_groups WHERE name = 'Transfers'").Scan(&transferGroupID)
 	if err == nil {
 		var exists int
-		db.QueryRow("SELECT COUNT(*) FROM categories WHERE group_id = ? AND name = 'Credit Card Payment'", transferGroupID).Scan(&exists)
+		_ = db.QueryRow("SELECT COUNT(*) FROM categories WHERE group_id = ? AND name = 'Credit Card Payment'", transferGroupID).Scan(&exists)
 		if exists == 0 {
-			db.Exec("INSERT INTO categories (group_id, name, sort_order) VALUES (?, 'Credit Card Payment', 1)", transferGroupID)
+			_, _ = db.Exec("INSERT INTO categories (group_id, name, sort_order) VALUES (?, 'Credit Card Payment', 1)", transferGroupID)
 		}
 	}
 }
@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS equity_vest_events (
 
 func SeedCategories(db *sql.DB) error {
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM category_groups").Scan(&count)
+	_ = db.QueryRow("SELECT COUNT(*) FROM category_groups").Scan(&count)
 	if count > 0 {
 		return nil
 	}

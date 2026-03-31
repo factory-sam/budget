@@ -46,7 +46,7 @@ var fourOneKContributeCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(status)
 		}
 
@@ -80,7 +80,7 @@ var fourOneKStatusCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(status)
 		}
 

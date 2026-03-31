@@ -29,9 +29,11 @@ var exportCmd = &cobra.Command{
 			return json.NewEncoder(os.Stdout).Encode(txs)
 		case "csv":
 			w := csv.NewWriter(os.Stdout)
-			w.Write([]string{"ID", "Date", "Payee", "Amount", "Type", "Category", "Account", "Note"})
+			if err := w.Write([]string{"ID", "Date", "Payee", "Amount", "Type", "Category", "Account", "Note"}); err != nil {
+				return fmt.Errorf("writing CSV header: %w", err)
+			}
 			for _, t := range txs {
-				w.Write([]string{
+				if err := w.Write([]string{
 					fmt.Sprintf("%d", t.ID),
 					t.Date,
 					t.Payee,
@@ -40,7 +42,9 @@ var exportCmd = &cobra.Command{
 					t.CategoryName,
 					t.AccountName,
 					t.Note,
-				})
+				}); err != nil {
+					return fmt.Errorf("writing CSV row: %w", err)
+				}
 			}
 			w.Flush()
 			return w.Error()

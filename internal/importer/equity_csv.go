@@ -14,6 +14,8 @@ import (
 	"github.com/sam/budget/internal/service"
 )
 
+const txTypeFee = "fee"
+
 type EquityCSVImporter struct {
 	svc       *service.Service
 	portfolio *equity.PortfolioService
@@ -36,13 +38,48 @@ func (r EquityImportResult) String() string {
 		r.Purchases, r.Sales, r.Dividends, r.Skipped)
 }
 
+// rowFields holds extracted and cleaned fields from a single CSV row.
+type rowFields struct {
+	date      string
+	desc      string
+	symbol    string
+	qtyStr    string
+	priceStr  string
+	amountStr string
+}
+
+func extractRowFields(row []string, cols equityColMap) rowFields {
+	rf := rowFields{}
+	if cols.date >= 0 && cols.date < len(row) {
+		rf.date = normalizeDate(strings.TrimSpace(row[cols.date]))
+	}
+	if cols.description >= 0 && cols.description < len(row) {
+		rf.desc = strings.TrimSpace(row[cols.description])
+	}
+	if cols.symbol >= 0 && cols.symbol < len(row) {
+		rf.symbol = strings.ToUpper(strings.TrimSpace(row[cols.symbol]))
+	}
+	if cols.quantity >= 0 && cols.quantity < len(row) {
+		rf.qtyStr = strings.TrimSpace(row[cols.quantity])
+	}
+	if cols.price >= 0 && cols.price < len(row) {
+		rf.priceStr = strings.TrimSpace(row[cols.price])
+	}
+	if cols.amount >= 0 && cols.amount < len(row) {
+		rf.amountStr = strings.TrimSpace(row[cols.amount])
+	}
+	return rf
+}
+
 func (e *EquityCSVImporter) Import(path string, accountID *int64) (*EquityImportResult, error) {
 	hash, err := fileHash(path)
 	if err != nil {
 		return nil, err
 	}
 	var existing int
-	e.svc.DB().QueryRow("SELECT COUNT(*) FROM import_records WHERE hash = ?", hash).Scan(&existing)
+	if err := e.svc.DB().QueryRow("SELECT COUNT(*) FROM import_records WHERE hash = ?", hash).Scan(&existing); err != nil {
+		existing = 0
+	}
 	if existing > 0 {
 		return nil, fmt.Errorf("file already imported (hash: %s)", hash[:12])
 	}
@@ -65,33 +102,7 @@ func (e *EquityCSVImporter) Import(path string, accountID *int64) (*EquityImport
 
 	// Sort data rows chronologically (CSVs are often newest-first)
 	dataRows := records[headerIdx+1:]
-	if len(dataRows) > 1 && cols.date >= 0 {
-		// Find first and last rows with actual dates (skip blank rows)
-		var firstDate, lastDate string
-		for _, row := range dataRows {
-			if cols.date < len(row) {
-				d := normalizeDate(strings.TrimSpace(row[cols.date]))
-				if isValidDate(d) {
-					firstDate = d
-					break
-				}
-			}
-		}
-		for i := len(dataRows) - 1; i >= 0; i-- {
-			if cols.date < len(dataRows[i]) {
-				d := normalizeDate(strings.TrimSpace(dataRows[i][cols.date]))
-				if isValidDate(d) {
-					lastDate = d
-					break
-				}
-			}
-		}
-		if firstDate > lastDate {
-			for left, right := 0, len(dataRows)-1; left < right; left, right = left+1, right-1 {
-				dataRows[left], dataRows[right] = dataRows[right], dataRows[left]
-			}
-		}
-	}
+	sortDataRowsChronologically(dataRows, cols)
 
 	result := &EquityImportResult{}
 
@@ -100,253 +111,256 @@ func (e *EquityCSVImporter) Import(path string, accountID *int64) (*EquityImport
 		if len(row) <= cols.date {
 			continue
 		}
-
-		date := normalizeDate(strings.TrimSpace(row[cols.date]))
-		if date == "" || !isValidDate(date) {
-			result.Skipped++
-			continue
-		}
-
-		desc := ""
-		if cols.description >= 0 && cols.description < len(row) {
-			desc = strings.TrimSpace(row[cols.description])
-		}
-
-		symbol := ""
-		if cols.symbol >= 0 && cols.symbol < len(row) {
-			symbol = strings.ToUpper(strings.TrimSpace(row[cols.symbol]))
-		}
-
-		qtyStr := ""
-		if cols.quantity >= 0 && cols.quantity < len(row) {
-			qtyStr = strings.TrimSpace(row[cols.quantity])
-		}
-
-		priceStr := ""
-		if cols.price >= 0 && cols.price < len(row) {
-			priceStr = strings.TrimSpace(row[cols.price])
-		}
-
-		amountStr := ""
-		if cols.amount >= 0 && cols.amount < len(row) {
-			amountStr = strings.TrimSpace(row[cols.amount])
-		}
-
-		txType := classifyTransaction(desc)
-
-		switch txType {
-		case "purchase":
-			if symbol == "" || qtyStr == "" || priceStr == "" {
-				result.Skipped++
-				continue
-			}
-			qty := parseNumber(qtyStr)
-			price := parseNumber(priceStr)
-			if qty <= 0 || price <= 0 {
-				result.Skipped++
-				continue
-			}
-			priceCents := int64(math.Round(price * 100))
-			note := truncateDesc(desc)
-			_, err := e.portfolio.BuyLot(accountID, symbol, qty, priceCents, date, note)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("row %d: %v", i+1, err))
-				continue
-			}
-			result.Purchases++
-
-		case "transfer_in":
-			if symbol == "" || qtyStr == "" {
-				result.Skipped++
-				continue
-			}
-			qty := parseNumber(qtyStr)
-			if qty <= 0 {
-				result.Skipped++
-				continue
-			}
-			// Use the price if available, otherwise cost basis = 0 (unknown)
-			price := parseNumber(priceStr)
-			priceCents := int64(math.Round(price * 100))
-			note := "Transfer in"
-			_, err := e.portfolio.BuyLot(accountID, symbol, qty, priceCents, date, note)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("row %d: %v", i+1, err))
-				continue
-			}
-			result.Purchases++
-
-		case "sale":
-			if symbol == "" || qtyStr == "" {
-				result.Skipped++
-				continue
-			}
-			qty := math.Abs(parseNumber(qtyStr))
-			if qty <= 0 {
-				result.Skipped++
-				continue
-			}
-			lots, _ := e.portfolio.ListLots(symbol, accountID)
-			sold := 0.0
-			for _, lot := range lots {
-				if sold >= qty {
-					break
-				}
-				toSell := math.Min(lot.Shares, qty-sold)
-				e.portfolio.SellLot(lot.ID, toSell)
-				sold += toSell
-			}
-			result.Sales++
-
-		case "dividend":
-			if symbol == "" {
-				result.Skipped++
-				continue
-			}
-			amount := parseNumber(amountStr)
-			if amount == 0 {
-				result.Skipped++
-				continue
-			}
-			cents := int64(math.Round(math.Abs(amount) * 100))
-			catID := e.svc.AutoCategorize("Dividend " + symbol)
-			// find an account to record against; use the linked account or first available
-			var txAccountID int64
-			if accountID != nil {
-				txAccountID = *accountID
-			} else {
-				accs, _ := e.svc.ListAccounts()
-				if len(accs) > 0 {
-					txAccountID = accs[0].ID
-				}
-			}
-			if txAccountID > 0 {
-				tx := transactionForDividend(txAccountID, catID, cents, date, symbol, desc)
-				// For managed/brokerage accounts, dividends are already reflected
-				// in portfolio lot values — insert without balance effect.
-				// For cash-like accounts (money_market), use CreateTransaction
-				// so dividends affect the account balance.
-				acc, _ := e.svc.GetAccount(txAccountID)
-				if acc != nil && (acc.Type == model.AccountManaged || acc.Type == model.AccountBrokerage) {
-					e.svc.DB().Exec(
-						"INSERT INTO transactions (account_id, category_id, amount, date, payee, note, type) VALUES (?, ?, ?, ?, ?, ?, ?)",
-						tx.AccountID, tx.CategoryID, tx.Amount, tx.Date, tx.Payee, tx.Note, tx.Type)
-				} else {
-					e.svc.CreateTransaction(tx)
-				}
-			}
-			result.Dividends++
-
-		case "fund_outflow":
-			amount := parseNumber(amountStr)
-			if amount == 0 {
-				result.Skipped++
-				continue
-			}
-			cents := int64(math.Round(math.Abs(amount) * 100))
-			var txAccountID int64
-			if accountID != nil {
-				txAccountID = *accountID
-			}
-			if txAccountID > 0 {
-				tx := model.Transaction{
-					AccountID: txAccountID,
-					Amount:    cents,
-					Date:      date,
-					Payee:     truncateDesc(desc),
-					Type:      model.TxExpense,
-				}
-				e.svc.CreateTransaction(tx)
-			}
-			result.Purchases++
-
-		case "deposit":
-			amount := parseNumber(amountStr)
-			if amount == 0 {
-				result.Skipped++
-				continue
-			}
-			cents := int64(math.Round(math.Abs(amount) * 100))
-			var txAccountID int64
-			if accountID != nil {
-				txAccountID = *accountID
-			}
-			if txAccountID > 0 {
-				txType := model.TxIncome
-				if amount < 0 {
-					txType = model.TxExpense
-				}
-				tx := model.Transaction{
-					AccountID: txAccountID,
-					Amount:    cents,
-					Date:      date,
-					Payee:     truncateDesc(desc),
-					Type:      txType,
-				}
-				tx.CategoryID = e.svc.AutoCategorize(desc)
-				e.svc.CreateTransaction(tx)
-			}
-			result.Dividends++
-
-		case "interest":
-			amount := parseNumber(amountStr)
-			if amount == 0 {
-				result.Skipped++
-				continue
-			}
-			cents := int64(math.Round(math.Abs(amount) * 100))
-			var txAccountID int64
-			if accountID != nil {
-				txAccountID = *accountID
-			}
-			if txAccountID > 0 {
-				catID := e.svc.AutoCategorize("Bank Interest")
-				tx := model.Transaction{
-					AccountID:  txAccountID,
-					CategoryID: catID,
-					Amount:     cents,
-					Date:       date,
-					Payee:      truncateDesc(desc),
-					Type:       model.TxIncome,
-				}
-				e.svc.CreateTransaction(tx)
-			}
-			result.Dividends++
-
-		case "fee":
-			amount := parseNumber(amountStr)
-			if amount == 0 {
-				result.Skipped++
-				continue
-			}
-			cents := int64(math.Round(math.Abs(amount) * 100))
-			var txAccountID int64
-			if accountID != nil {
-				txAccountID = *accountID
-			}
-			if txAccountID > 0 {
-				tx := model.Transaction{
-					AccountID: txAccountID,
-					Amount:    cents,
-					Date:      date,
-					Payee:     truncateDesc(desc),
-					Type:      model.TxExpense,
-				}
-				e.svc.CreateTransaction(tx)
-			}
-			result.Purchases++
-
-		case "reinvest_shares":
-			result.Skipped++ // $0 share allocation entries
-
-		default:
-			result.Skipped++
-		}
+		e.processRow(row, cols, accountID, result, i)
 	}
 
 	total := result.Purchases + result.Sales + result.Dividends
-	e.svc.DB().Exec("INSERT INTO import_records (filename, hash, tx_count) VALUES (?, ?, ?)", path, hash, total)
+	if _, err := e.svc.DB().Exec("INSERT INTO import_records (filename, hash, tx_count) VALUES (?, ?, ?)", path, hash, total); err != nil {
+		return result, fmt.Errorf("record import: %w", err)
+	}
 	return result, nil
+}
+
+func sortDataRowsChronologically(dataRows [][]string, cols equityColMap) {
+	if len(dataRows) <= 1 || cols.date < 0 {
+		return
+	}
+	// Find first and last rows with actual dates (skip blank rows)
+	var firstDate, lastDate string
+	for _, row := range dataRows {
+		if cols.date < len(row) {
+			d := normalizeDate(strings.TrimSpace(row[cols.date]))
+			if isValidDate(d) {
+				firstDate = d
+				break
+			}
+		}
+	}
+	for i := len(dataRows) - 1; i >= 0; i-- {
+		if cols.date < len(dataRows[i]) {
+			d := normalizeDate(strings.TrimSpace(dataRows[i][cols.date]))
+			if isValidDate(d) {
+				lastDate = d
+				break
+			}
+		}
+	}
+	if firstDate > lastDate {
+		for left, right := 0, len(dataRows)-1; left < right; left, right = left+1, right-1 {
+			dataRows[left], dataRows[right] = dataRows[right], dataRows[left]
+		}
+	}
+}
+
+func (e *EquityCSVImporter) processRow(row []string, cols equityColMap, accountID *int64, result *EquityImportResult, i int) {
+	rf := extractRowFields(row, cols)
+
+	if rf.date == "" || !isValidDate(rf.date) {
+		result.Skipped++
+		return
+	}
+
+	txType := classifyTransaction(rf.desc)
+
+	switch txType {
+	case "purchase":
+		e.handlePurchase(accountID, rf.symbol, rf.qtyStr, rf.priceStr, rf.desc, rf.date, i, result)
+	case "transfer_in":
+		e.handleTransferIn(accountID, rf.symbol, rf.qtyStr, rf.priceStr, rf.date, i, result)
+	case "sale":
+		e.handleSale(accountID, rf.symbol, rf.qtyStr, rf.date, i, result)
+	case "dividend":
+		e.handleDividend(accountID, rf.symbol, rf.amountStr, rf.desc, rf.date, i, result)
+	case "fund_outflow":
+		e.handleSimpleTransaction(accountID, rf.amountStr, rf.desc, rf.date, model.TxExpense, "", i, result, &result.Purchases)
+	case "deposit":
+		e.handleDeposit(accountID, rf.amountStr, rf.desc, rf.date, i, result)
+	case "interest":
+		e.handleSimpleTransaction(accountID, rf.amountStr, rf.desc, rf.date, model.TxIncome, "Bank Interest", i, result, &result.Dividends)
+	case txTypeFee:
+		e.handleSimpleTransaction(accountID, rf.amountStr, rf.desc, rf.date, model.TxExpense, "", i, result, &result.Purchases)
+	case "reinvest_shares":
+		result.Skipped++ // $0 share allocation entries
+	default:
+		result.Skipped++
+	}
+}
+
+func (e *EquityCSVImporter) handlePurchase(accountID *int64, symbol, qtyStr, priceStr, desc, date string, i int, result *EquityImportResult) {
+	if symbol == "" || qtyStr == "" || priceStr == "" {
+		result.Skipped++
+		return
+	}
+	qty := parseNumber(qtyStr)
+	price := parseNumber(priceStr)
+	if qty <= 0 || price <= 0 {
+		result.Skipped++
+		return
+	}
+	priceCents := int64(math.Round(price * 100))
+	note := truncateDesc(desc)
+	_, err := e.portfolio.BuyLot(accountID, symbol, qty, priceCents, date, note)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("row %d: %v", i+1, err))
+		return
+	}
+	result.Purchases++
+}
+
+func (e *EquityCSVImporter) handleTransferIn(accountID *int64, symbol, qtyStr, priceStr, date string, i int, result *EquityImportResult) {
+	if symbol == "" || qtyStr == "" {
+		result.Skipped++
+		return
+	}
+	qty := parseNumber(qtyStr)
+	if qty <= 0 {
+		result.Skipped++
+		return
+	}
+	// Use the price if available, otherwise cost basis = 0 (unknown)
+	price := parseNumber(priceStr)
+	priceCents := int64(math.Round(price * 100))
+	note := "Transfer in"
+	_, err := e.portfolio.BuyLot(accountID, symbol, qty, priceCents, date, note)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("row %d: %v", i+1, err))
+		return
+	}
+	result.Purchases++
+}
+
+func (e *EquityCSVImporter) handleSale(accountID *int64, symbol, qtyStr, _ string, i int, result *EquityImportResult) {
+	if symbol == "" || qtyStr == "" {
+		result.Skipped++
+		return
+	}
+	qty := math.Abs(parseNumber(qtyStr))
+	if qty <= 0 {
+		result.Skipped++
+		return
+	}
+	lots, _ := e.portfolio.ListLots(symbol, accountID)
+	sold := 0.0
+	for _, lot := range lots {
+		if sold >= qty {
+			break
+		}
+		toSell := math.Min(lot.Shares, qty-sold)
+		if err := e.portfolio.SellLot(lot.ID, toSell); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("row %d: sell lot: %v", i+1, err))
+			continue
+		}
+		sold += toSell
+	}
+	result.Sales++
+}
+
+func (e *EquityCSVImporter) handleDividend(accountID *int64, symbol, amountStr, desc, date string, i int, result *EquityImportResult) {
+	if symbol == "" {
+		result.Skipped++
+		return
+	}
+	amount := parseNumber(amountStr)
+	if amount == 0 {
+		result.Skipped++
+		return
+	}
+	cents := int64(math.Round(math.Abs(amount) * 100))
+	catID := e.svc.AutoCategorize("Dividend " + symbol)
+	// find an account to record against; use the linked account or first available
+	var txAccountID int64
+	if accountID != nil {
+		txAccountID = *accountID
+	} else {
+		accs, _ := e.svc.ListAccounts()
+		if len(accs) > 0 {
+			txAccountID = accs[0].ID
+		}
+	}
+	if txAccountID > 0 {
+		tx := transactionForDividend(txAccountID, catID, cents, date, symbol, desc)
+		// For managed/brokerage accounts, dividends are already reflected
+		// in portfolio lot values — insert without balance effect.
+		// For cash-like accounts (money_market), use CreateTransaction
+		// so dividends affect the account balance.
+		acc, _ := e.svc.GetAccount(txAccountID)
+		if acc != nil && (acc.Type == model.AccountManaged || acc.Type == model.AccountBrokerage) {
+			if _, err := e.svc.DB().Exec(
+				"INSERT INTO transactions (account_id, category_id, amount, date, payee, note, type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				tx.AccountID, tx.CategoryID, tx.Amount, tx.Date, tx.Payee, tx.Note, tx.Type); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("row %d: insert dividend: %v", i+1, err))
+				return
+			}
+		} else {
+			if _, err := e.svc.CreateTransaction(tx); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("row %d: create dividend tx: %v", i+1, err))
+				return
+			}
+		}
+	}
+	result.Dividends++
+}
+
+func (e *EquityCSVImporter) handleDeposit(accountID *int64, amountStr, desc, date string, i int, result *EquityImportResult) {
+	amount := parseNumber(amountStr)
+	if amount == 0 {
+		result.Skipped++
+		return
+	}
+	cents := int64(math.Round(math.Abs(amount) * 100))
+	var txAccountID int64
+	if accountID != nil {
+		txAccountID = *accountID
+	}
+	if txAccountID > 0 {
+		txType := model.TxIncome
+		if amount < 0 {
+			txType = model.TxExpense
+		}
+		tx := model.Transaction{
+			AccountID: txAccountID,
+			Amount:    cents,
+			Date:      date,
+			Payee:     truncateDesc(desc),
+			Type:      txType,
+		}
+		tx.CategoryID = e.svc.AutoCategorize(desc)
+		if _, err := e.svc.CreateTransaction(tx); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("row %d: create deposit tx: %v", i+1, err))
+			return
+		}
+	}
+	result.Dividends++
+}
+
+func (e *EquityCSVImporter) handleSimpleTransaction(accountID *int64, amountStr, desc, date string, txType model.TxType, autoCatPayee string, i int, result *EquityImportResult, counter *int) {
+	amount := parseNumber(amountStr)
+	if amount == 0 {
+		result.Skipped++
+		return
+	}
+	cents := int64(math.Round(math.Abs(amount) * 100))
+	var txAccountID int64
+	if accountID != nil {
+		txAccountID = *accountID
+	}
+	if txAccountID > 0 {
+		tx := model.Transaction{
+			AccountID: txAccountID,
+			Amount:    cents,
+			Date:      date,
+			Payee:     truncateDesc(desc),
+			Type:      txType,
+		}
+		if autoCatPayee != "" {
+			tx.CategoryID = e.svc.AutoCategorize(autoCatPayee)
+		}
+		if _, err := e.svc.CreateTransaction(tx); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("row %d: create %s tx: %v", i+1, txType, err))
+			return
+		}
+	}
+	*counter++
 }
 
 type equityColMap struct {
@@ -366,27 +380,57 @@ func (e *EquityCSVImporter) detectEquityCols(header []string) equityColMap {
 		date: -1, settlement: -1, account: -1, description: -1,
 		txType: -1, symbol: -1, quantity: -1, price: -1, amount: -1,
 	}
+
+	// Exact-match lookup table
+	exactMap := map[string]func(int){
+		"trade date":      func(i int) { m.date = i },
+		"settlement date": func(i int) { m.settlement = i },
+		"account":         func(i int) { m.account = i },
+		"description":     func(i int) { m.description = i },
+		"desc":            func(i int) { m.description = i },
+		"type":            func(i int) { m.txType = i },
+		"action":          func(i int) { m.txType = i },
+		"trans type":      func(i int) { m.txType = i },
+		"ticker":          func(i int) { m.symbol = i },
+		"qty":             func(i int) { m.quantity = i },
+		"shares":          func(i int) { m.quantity = i },
+		"net amount":      func(i int) { m.amount = i },
+		"total":           func(i int) { m.amount = i },
+	}
+
+	// Substring-match rules, checked in order
+	type substringRule struct {
+		substrings []string
+		assign     func(int)
+	}
+	substringRules := []substringRule{
+		{[]string{"trade", "date"}, func(i int) { m.date = i }}, // both must match
+		{[]string{"settle"}, func(i int) { m.settlement = i }},
+		{[]string{"symbol"}, func(i int) { m.symbol = i }},
+		{[]string{"cusip"}, func(i int) { m.symbol = i }},
+		{[]string{"quantity"}, func(i int) { m.quantity = i }},
+		{[]string{"price"}, func(i int) { m.price = i }},
+		{[]string{"amount"}, func(i int) { m.amount = i }},
+	}
+
 	for i, h := range header {
 		h = strings.ToLower(strings.TrimSpace(h))
-		switch {
-		case h == "trade date" || (strings.Contains(h, "trade") && strings.Contains(h, "date")):
-			m.date = i
-		case h == "settlement date" || strings.Contains(h, "settle"):
-			m.settlement = i
-		case h == "account":
-			m.account = i
-		case h == "description" || h == "desc":
-			m.description = i
-		case h == "type" || h == "action" || h == "trans type":
-			m.txType = i
-		case strings.Contains(h, "symbol") || strings.Contains(h, "cusip") || h == "ticker":
-			m.symbol = i
-		case strings.Contains(h, "quantity") || h == "qty" || h == "shares":
-			m.quantity = i
-		case strings.Contains(h, "price"):
-			m.price = i
-		case strings.Contains(h, "amount") || h == "net amount" || h == "total":
-			m.amount = i
+		if fn, ok := exactMap[h]; ok {
+			fn(i)
+			continue
+		}
+		for _, rule := range substringRules {
+			matched := true
+			for _, sub := range rule.substrings {
+				if !strings.Contains(h, sub) {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				rule.assign(i)
+				break
+			}
 		}
 	}
 	return m
@@ -472,9 +516,9 @@ func classifyTransaction(desc string) string {
 	case strings.Contains(d, "funds received") || strings.HasPrefix(d, "withdrawal") || strings.HasPrefix(d, "transfer / adjustment"):
 		return "deposit"
 	case strings.Contains(d, "annual service fee") || strings.Contains(d, "advisory fee"):
-		return "fee"
+		return txTypeFee
 	case strings.Contains(d, "advisory program fee") || strings.Contains(d, "advisory fee"):
-		return "fee"
+		return txTypeFee
 	case strings.Contains(d, "bank interest"):
 		return "interest"
 	case strings.HasPrefix(d, "reinvestment program") || strings.HasPrefix(d, "subscription"):

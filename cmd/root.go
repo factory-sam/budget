@@ -11,9 +11,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	formatJSON = "json"
+	emDash     = "—"
+)
+
 var (
-	dbPath  string
-	service *svc.Service
+	dbPath   string
+	service  *svc.Service
 	database *sql.DB
 )
 

@@ -94,7 +94,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.showModal {
 			var cmd tea.Cmd
 			a.modal, cmd = a.modal.Update(msg)
-			if msg.String() == "esc" {
+			if msg.String() == keyEsc {
 				a.showModal = false
 				return a, nil
 			}
@@ -274,29 +274,38 @@ func (a *App) helpText() string {
 			return "j/k:navigate  enter:select  esc:cancel  type to filter"
 		}
 		if a.transactions.InputActive() {
-			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+			return helpFormNav
 		}
 		return "j/k:navigate  a:add  c:categorize  t:type  u:uncategorized  /:search  d:delete  " + common
 	case TabBudgets:
 		if a.budgets.InputActive() {
-			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+			return helpFormNav
 		}
-		return "j/k:navigate  a:set budget  g/G:top/bottom  " + common
+		return "j/k:navigate  e/enter:edit  a:set budget  g/G:top/bottom  " + common
 	case TabAccounts:
+		if a.accounts.confirmDelete {
+			return helpConfirmDelete
+		}
 		if a.accounts.InputActive() {
-			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+			return helpFormNav
 		}
 		return "j/k:navigate  a:add  g/G:top/bottom  d:delete  " + common
 	case TabRecurring:
+		if a.recurring.confirmDelete {
+			return helpConfirmDelete
+		}
 		if a.recurring.InputActive() {
-			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+			return helpFormNav
 		}
 		return "j/k:navigate  a:add  g/G:top/bottom  d:delete  " + common
 	case TabReports:
 		return "h/l:switch reports  " + common
 	case TabPortfolio:
+		if a.portfolio.confirmDelete {
+			return helpConfirmDelete
+		}
 		if a.portfolio.InputActive() {
-			return "tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"
+			return helpFormNav
 		}
 		switch a.portfolio.subView {
 		case PortfolioPositions:

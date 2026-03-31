@@ -1,6 +1,44 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+func fmtMoney(cents int64) string {
+	negative := cents < 0
+	if negative {
+		cents = -cents
+	}
+	dollars := cents / 100
+	remainder := cents % 100
+
+	s := fmt.Sprintf("%d", dollars)
+	// Insert commas
+	if len(s) > 3 {
+		var parts []string
+		for len(s) > 3 {
+			parts = append([]string{s[len(s)-3:]}, parts...)
+			s = s[:len(s)-3]
+		}
+		parts = append([]string{s}, parts...)
+		s = strings.Join(parts, ",")
+	}
+
+	if negative {
+		return fmt.Sprintf("-$%s.%02d", s, remainder)
+	}
+	return fmt.Sprintf("$%s.%02d", s, remainder)
+}
+
+func fmtMoneySign(cents int64) string {
+	if cents >= 0 {
+		return "+" + fmtMoney(cents)
+	}
+	return fmtMoney(cents)
+}
 
 var (
 	subtle    = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}

@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
 	"github.com/NimbleMarkets/ntcharts/sparkline"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/sam/budget/internal/model"
 	"github.com/sam/budget/internal/service"
 )
@@ -130,20 +130,18 @@ func (d DashboardModel) renderNetWorth(w int) string {
 	s := headerStyle.Render("Net Worth")
 	s += "\n"
 	nw := d.netWorth
-	sign := ""
 	style := greenStyle
 	if nw.NetWorth < 0 {
 		style = redStyle
-		sign = "-"
 	}
-	s += style.Bold(true).Render(fmt.Sprintf("  %s$%.2f", sign, float64(abs(nw.NetWorth))/100))
+	s += style.Bold(true).Render(fmt.Sprintf("  %s", fmtMoney(nw.NetWorth)))
 	s += "\n"
-	s += fmt.Sprintf("  Assets: $%.2f  |  Liabilities: $%.2f",
-		float64(nw.TotalAssets)/100, float64(nw.TotalLiabilities)/100)
+	s += fmt.Sprintf("  Assets: %s  |  Liabilities: %s",
+		fmtMoney(nw.TotalAssets), fmtMoney(nw.TotalLiabilities))
 	if nw.EquityValue > 0 {
 		cashAssets := nw.TotalAssets - nw.EquityValue
-		s += fmt.Sprintf("\n  Cash/Accounts: $%.2f  |  Investments: $%.2f",
-			float64(cashAssets)/100, float64(nw.EquityValue)/100)
+		s += fmt.Sprintf("\n  Cash/Accounts: %s  |  Investments: %s",
+			fmtMoney(cashAssets), fmtMoney(nw.EquityValue))
 	}
 	return boxStyle.Width(w).Render(s)
 }
@@ -179,7 +177,7 @@ func (d DashboardModel) renderAccounts(w int) string {
 		return boxStyle.Width(w).Render(s + "\n  No accounts yet")
 	}
 	for _, a := range d.accounts {
-		line := fmt.Sprintf("\n  %-18s $%.2f", truncStr(a.Name, 18), float64(a.Balance)/100)
+		line := fmt.Sprintf("\n  %-18s %10s", truncStr(a.Name, 18), fmtMoney(a.Balance))
 		// Add sparkline if we have history
 		if hist, ok := d.acctHistory[a.ID]; ok && len(hist) > 1 {
 			sparkW := w - 40
@@ -244,7 +242,7 @@ func (d DashboardModel) renderBudgetSummary(w int) string {
 		if b.AmountLimit > 0 {
 			s += fmt.Sprintf("\n  %-15s %s %.0f%%", label, bar, b.Percent)
 		} else {
-			s += fmt.Sprintf("\n  %-15s $%.2f (no limit)", label, float64(b.Spent)/100)
+			s += fmt.Sprintf("\n  %-15s %s (no limit)", label, fmtMoney(b.Spent))
 		}
 	}
 	return boxStyle.Width(w).Render(s)
@@ -286,16 +284,14 @@ func (d DashboardModel) renderCashFlowMini(w int) string {
 		}
 		net := cf.Income - cf.Expenses
 		netStyle := greenStyle
-		netSign := "+"
 		if net < 0 {
 			netStyle = redStyle
-			netSign = ""
 		}
 		s += fmt.Sprintf("\n  %s %s%s %s",
 			cf.Month[:7],
 			greenStyle.Render(strings.Repeat("█", incBar))+redStyle.Render(strings.Repeat("▒", expBar)),
 			strings.Repeat("░", barW*2-incBar-expBar),
-			netStyle.Render(fmt.Sprintf("%s$%.0f", netSign, float64(net)/100)),
+			netStyle.Render(fmtMoneySign(net)),
 		)
 	}
 	return boxStyle.Width(w).Render(s)
@@ -312,7 +308,7 @@ func (d DashboardModel) renderTopSpending(w int) string {
 		limit = len(d.spending)
 	}
 	for _, sp := range d.spending[:limit] {
-		s += fmt.Sprintf("\n  %-20s $%.2f (%.0f%%)", sp.CategoryName, float64(sp.Amount)/100, sp.Percent)
+		s += fmt.Sprintf("\n  %-20s %s (%.0f%%)", sp.CategoryName, fmtMoney(sp.Amount), sp.Percent)
 	}
 	return boxStyle.Width(w).Render(s)
 }
@@ -333,17 +329,10 @@ func (d DashboardModel) renderRecentTxs() string {
 		s += fmt.Sprintf("  %s  %-25s  %s  %s\n",
 			t.Date,
 			truncStr(t.Payee, 25),
-			style.Render(fmt.Sprintf("%s$%.2f", sign, float64(t.Amount)/100)),
+			style.Render(fmt.Sprintf("%s%s", sign, fmtMoney(t.Amount))),
 			lipgloss.NewStyle().Foreground(muted).Render(t.CategoryName))
 	}
 	return s
-}
-
-func abs(n int64) int64 {
-	if n < 0 {
-		return -n
-	}
-	return n
 }
 
 func truncStr(s string, n int) string {

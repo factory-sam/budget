@@ -52,7 +52,7 @@ func (b BudgetsModel) Update(msg tea.Msg) (BudgetsModel, tea.Cmd) {
 		b.cursor = 0
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "j", "down":
+		case "j", keyDown:
 			if b.cursor < len(b.statuses)-1 {
 				b.cursor++
 			}
@@ -68,6 +68,10 @@ func (b BudgetsModel) Update(msg tea.Msg) (BudgetsModel, tea.Cmd) {
 			}
 		case "a":
 			b.form = b.newSetForm()
+		case "e", "enter":
+			if len(b.statuses) > 0 && b.cursor < len(b.statuses) {
+				b.form = b.newEditForm(b.statuses[b.cursor])
+			}
 		}
 	}
 	return b, nil
@@ -97,7 +101,39 @@ func (b *BudgetsModel) newSetForm() FormModel {
 		}
 		cents := int64(math.Round(amount * 100))
 		now := time.Now()
-		svc.SetBudget(cat.ID, now.Year(), int(now.Month()), cents)
+		if err := svc.SetBudget(cat.ID, now.Year(), int(now.Month()), cents); err != nil {
+			return nil, fmt.Sprintf("Error setting budget: %v", err)
+		}
+		return func() tea.Msg {
+			statuses, _ := svc.GetBudgetStatus(now.Year(), int(now.Month()))
+			return budgetDataMsg{statuses}
+		}, ""
+	})
+}
+
+func (b *BudgetsModel) newEditForm(status model.BudgetStatus) FormModel {
+	svc := b.svc
+	catID := status.CategoryID
+	currentLimit := ""
+	if status.AmountLimit > 0 {
+		currentLimit = fmt.Sprintf("%.2f", float64(status.AmountLimit)/100)
+	}
+	return NewForm(fmt.Sprintf("Edit Budget — %s", status.CategoryName), []FormField{
+		{Label: "Monthly Limit", Value: currentLimit, Placeholder: "e.g. 600 (0 to remove)"},
+	}, func(fields []FormField) (tea.Cmd, string) {
+		amtStr := strings.TrimSpace(fields[0].Value)
+		if amtStr == "" {
+			return nil, "Monthly limit is required (enter 0 to remove)"
+		}
+		amount, err := strconv.ParseFloat(amtStr, 64)
+		if err != nil || amount < 0 {
+			return nil, "Invalid amount — enter a number like 600"
+		}
+		cents := int64(math.Round(amount * 100))
+		now := time.Now()
+		if err := svc.SetBudget(catID, now.Year(), int(now.Month()), cents); err != nil {
+			return nil, fmt.Sprintf("Failed to set budget: %v", err)
+		}
 		return func() tea.Msg {
 			statuses, _ := svc.GetBudgetStatus(now.Year(), int(now.Month()))
 			return budgetDataMsg{statuses}
@@ -120,8 +156,7 @@ func (b BudgetsModel) View() string {
 	sb.WriteString(headerStyle.Render(fmt.Sprintf("Budgets — %s %d", now.Month().String(), now.Year())) + "\n\n")
 
 	if len(b.statuses) == 0 {
-		sb.WriteString("  No budgets set. Use the CLI to set budgets:\n")
-		sb.WriteString("  budget set Groceries 600\n")
+		sb.WriteString("  No budgets set. Press 'a' to add one.\n")
 		return sb.String()
 	}
 
@@ -153,17 +188,17 @@ func (b BudgetsModel) View() string {
 
 		bar := barStyle.Render(strings.Repeat("█", filled)) + strings.Repeat("░", empty)
 
-		remaining := fmt.Sprintf("$%.2f remaining", float64(s.Remaining)/100)
+		remaining := fmt.Sprintf("%s remaining", fmtMoney(s.Remaining))
 		if s.Remaining < 0 {
-			remaining = redStyle.Render(fmt.Sprintf("$%.2f over!", float64(-s.Remaining)/100))
+			remaining = redStyle.Render(fmt.Sprintf("%s over!", fmtMoney(-s.Remaining)))
 		}
 
-		line := fmt.Sprintf("  %-18s %s  %5.0f%%  $%.2f / $%.2f  %s",
+		line := fmt.Sprintf("  %-18s %s  %5.0f%%  %s / %s  %s",
 			truncStr(s.CategoryName, 18),
 			bar,
 			s.Percent,
-			float64(s.Spent)/100,
-			float64(s.AmountLimit)/100,
+			fmtMoney(s.Spent),
+			fmtMoney(s.AmountLimit),
 			remaining)
 
 		if i == b.cursor {
@@ -172,6 +207,6 @@ func (b BudgetsModel) View() string {
 		sb.WriteString(line + "\n")
 	}
 
-	sb.WriteString(fmt.Sprintf("\n  j/k:navigate"))
+	sb.WriteString(fmt.Sprintf("\n  %d categories [%d/%d]", len(b.statuses), b.cursor+1, len(b.statuses)))
 	return sb.String()
 }

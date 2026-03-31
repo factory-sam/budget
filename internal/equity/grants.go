@@ -86,8 +86,10 @@ func (g *GrantService) generateVestEvents(grant *model.EquityGrant) error {
 		cliffShares = grant.TotalShares
 	}
 
-	tx.Exec("INSERT INTO equity_vest_events (grant_id, date, shares, status) VALUES (?, ?, ?, 'pending')",
-		grant.ID, cliffDate.Format("2006-01-02"), cliffShares)
+	if _, err := tx.Exec("INSERT INTO equity_vest_events (grant_id, date, shares, status) VALUES (?, ?, ?, 'pending')",
+		grant.ID, cliffDate.Format("2006-01-02"), cliffShares); err != nil {
+		return err
+	}
 
 	// post-cliff vests
 	remaining := grant.TotalShares - cliffShares
@@ -98,12 +100,13 @@ func (g *GrantService) generateVestEvents(grant *model.EquityGrant) error {
 			shares := perPeriod
 			// last period gets remainder to avoid rounding issues
 			if i == postCliffPeriods {
-				var sumSoFar float64
-				sumSoFar = cliffShares + perPeriod*float64(i-1)
+				sumSoFar := cliffShares + perPeriod*float64(i-1)
 				shares = grant.TotalShares - sumSoFar
 			}
-			tx.Exec("INSERT INTO equity_vest_events (grant_id, date, shares, status) VALUES (?, ?, ?, 'pending')",
-				grant.ID, vestDate.Format("2006-01-02"), shares)
+			if _, err := tx.Exec("INSERT INTO equity_vest_events (grant_id, date, shares, status) VALUES (?, ?, ?, 'pending')",
+				grant.ID, vestDate.Format("2006-01-02"), shares); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -162,12 +165,12 @@ func (g *GrantService) computeVestingStatus(grantID int64, totalShares float64) 
 	today := time.Now().Format("2006-01-02")
 
 	// sum vested/exercised shares
-	g.db.QueryRow("SELECT COALESCE(SUM(shares), 0) FROM equity_vest_events WHERE grant_id = ? AND status IN ('vested', 'exercised') ",
+	_ = g.db.QueryRow("SELECT COALESCE(SUM(shares), 0) FROM equity_vest_events WHERE grant_id = ? AND status IN ('vested', 'exercised') ",
 		grantID).Scan(&vested)
 	unvested = totalShares - vested
 
 	// next pending vest date
-	g.db.QueryRow("SELECT date FROM equity_vest_events WHERE grant_id = ? AND status = 'pending' AND date >= ? ORDER BY date LIMIT 1",
+	_ = g.db.QueryRow("SELECT date FROM equity_vest_events WHERE grant_id = ? AND status = 'pending' AND date >= ? ORDER BY date LIMIT 1",
 		grantID, today).Scan(&nextVest)
 	return
 }
@@ -184,7 +187,9 @@ func (g *GrantService) GetVestSchedule(grantID int64) ([]model.VestEvent, error)
 	var events []model.VestEvent
 	for rows.Next() {
 		var e model.VestEvent
-		rows.Scan(&e.ID, &e.GrantID, &e.Date, &e.Shares, &e.FMVPerShare, &e.Status, &e.LotID)
+		if err := rows.Scan(&e.ID, &e.GrantID, &e.Date, &e.Shares, &e.FMVPerShare, &e.Status, &e.LotID); err != nil {
+			continue
+		}
 		events = append(events, e)
 	}
 	return events, nil
@@ -217,7 +222,9 @@ func (g *GrantService) VestGrant(grantID int64, fmvOverride *int64) (int, error)
 			date   string
 			shares float64
 		}
-		rows.Scan(&e.id, &e.date, &e.shares)
+		if err := rows.Scan(&e.id, &e.date, &e.shares); err != nil {
+			continue
+		}
 		events = append(events, e)
 	}
 	rows.Close()
@@ -238,12 +245,16 @@ func (g *GrantService) VestGrant(grantID int64, fmvOverride *int64) (int, error)
 			if err != nil {
 				return count, err
 			}
-			g.db.Exec("UPDATE equity_vest_events SET status = 'vested', fmv_per_share = ?, lot_id = ? WHERE id = ?",
-				fmv, lot.ID, e.id)
+			if _, err := g.db.Exec("UPDATE equity_vest_events SET status = 'vested', fmv_per_share = ?, lot_id = ? WHERE id = ?",
+				fmv, lot.ID, e.id); err != nil {
+				return count, err
+			}
 		} else {
 			// ISO: mark as vested (exercisable) but don't create lot yet
-			g.db.Exec("UPDATE equity_vest_events SET status = 'vested', fmv_per_share = ? WHERE id = ?",
-				fmv, e.id)
+			if _, err := g.db.Exec("UPDATE equity_vest_events SET status = 'vested', fmv_per_share = ? WHERE id = ?",
+				fmv, e.id); err != nil {
+				return count, err
+			}
 		}
 		count++
 	}
@@ -287,14 +298,18 @@ func (g *GrantService) ExerciseISO(vestEventID int64, fmvAtExerciseCents int64) 
 		return nil, err
 	}
 
-	g.db.Exec("UPDATE equity_vest_events SET status = 'exercised', fmv_per_share = ?, lot_id = ? WHERE id = ?",
-		fmvAtExerciseCents, lot.ID, vestEventID)
+	if _, err := g.db.Exec("UPDATE equity_vest_events SET status = 'exercised', fmv_per_share = ?, lot_id = ? WHERE id = ?",
+		fmvAtExerciseCents, lot.ID, vestEventID); err != nil {
+		return nil, err
+	}
 
 	return lot, nil
 }
 
 func (g *GrantService) DeleteGrant(id int64) error {
-	g.db.Exec("DELETE FROM equity_vest_events WHERE grant_id = ?", id)
+	if _, err := g.db.Exec("DELETE FROM equity_vest_events WHERE grant_id = ?", id); err != nil {
+		return err
+	}
 	_, err := g.db.Exec("DELETE FROM equity_grants WHERE id = ?", id)
 	return err
 }

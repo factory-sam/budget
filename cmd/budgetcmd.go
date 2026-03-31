@@ -53,7 +53,7 @@ var statusCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(statuses)
 		}
 

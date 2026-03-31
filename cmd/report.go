@@ -29,7 +29,7 @@ var reportSpendingCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(results)
 		}
 
@@ -64,7 +64,7 @@ var reportNetworthCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(snap)
 		}
 
@@ -101,7 +101,7 @@ var reportCashflowCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(results)
 		}
 
@@ -175,7 +175,7 @@ var reportIncomeCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(results)
 		}
 

@@ -31,24 +31,25 @@ type PortfolioModel struct {
 		Get401kStatus(int64, int) (*model.Contribution401k, error)
 	}
 
-	width, height   int
-	summary         *model.PortfolioSummary
-	grantList       []model.EquityGrant
-	vestEvents      []model.VestEvent
-	vestGrantID     int64
-	cursor          int
-	subView         PortfolioSubView
-	refreshing      bool
-	form            FormModel
-	statusMsg       string
-	lotsExpanded    bool // whether to show individual lots for selected position
+	width, height int
+	summary       *model.PortfolioSummary
+	grantList     []model.EquityGrant
+	vestEvents    []model.VestEvent
+	vestGrantID   int64
+	cursor        int
+	subView       PortfolioSubView
+	refreshing    bool
+	form          FormModel
+	statusMsg     string
+	lotsExpanded  bool // whether to show individual lots for selected position
 	// account filter
 	investAccounts  []model.Account
 	filterIdx       int // 0 = All, 1..N = specific account
 	filterAccountID *int64
+	confirmDelete   bool
 }
 
-func (p PortfolioModel) InputActive() bool { return p.form.Active() }
+func (p PortfolioModel) InputActive() bool { return p.form.Active() || p.confirmDelete }
 
 func NewPortfolioModel(prices *equity.PriceService, portfolio *equity.PortfolioService, grants *equity.GrantService, svc interface {
 	ListInvestmentAccounts() ([]model.Account, error)
@@ -120,8 +121,20 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 
 	case tea.KeyMsg:
 		p.statusMsg = ""
+
+		if p.confirmDelete {
+			switch msg.String() {
+			case "y", "Y":
+				p.confirmDelete = false
+				return p.executeDelete()
+			default:
+				p.confirmDelete = false
+			}
+			return p, nil
+		}
+
 		switch msg.String() {
-		case "j", "down":
+		case "j", keyDown:
 			p.cursor++
 			maxLen := p.currentListLen()
 			if p.cursor >= maxLen {
@@ -173,7 +186,7 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 				p.form = p.newGrantForm()
 			}
 		case "d":
-			return p.handleDelete()
+			p.confirmDelete = true
 		case "v":
 			if p.subView == PortfolioGrants {
 				return p.handleVest()
@@ -194,10 +207,12 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 			p.refreshing = true
 			return p, func() tea.Msg {
 				tickers, _ := p.portfolio.GetDistinctTickers()
-				p.prices.FetchPrices(tickers)
+				if _, err := p.prices.FetchPrices(tickers); err != nil {
+					p.statusMsg = fmt.Sprintf("Price refresh error: %v", err)
+				}
 				return priceRefreshDoneMsg{}
 			}
-		case "esc":
+		case keyEsc:
 			if p.subView == PortfolioVestSchedule {
 				p.subView = PortfolioGrants
 				p.cursor = 0
@@ -207,14 +222,17 @@ func (p PortfolioModel) Update(msg tea.Msg) (PortfolioModel, tea.Cmd) {
 	return p, nil
 }
 
-func (p PortfolioModel) handleDelete() (PortfolioModel, tea.Cmd) {
+func (p PortfolioModel) executeDelete() (PortfolioModel, tea.Cmd) {
 	switch p.subView {
 	case PortfolioPositions:
 		if p.summary != nil && p.cursor < len(p.summary.Positions) {
 			pos := p.summary.Positions[p.cursor]
 			// delete all lots for this position
 			for _, lot := range pos.Lots {
-				p.portfolio.SellLot(lot.ID, lot.Shares)
+				if err := p.portfolio.SellLot(lot.ID, lot.Shares); err != nil {
+					p.statusMsg = fmt.Sprintf("Error deleting lot #%d: %v", lot.ID, err)
+					return p, nil
+				}
 			}
 			p.statusMsg = fmt.Sprintf("Deleted all %s lots", pos.Ticker)
 			return p, p.Init()
@@ -222,7 +240,10 @@ func (p PortfolioModel) handleDelete() (PortfolioModel, tea.Cmd) {
 	case PortfolioGrants:
 		if p.cursor < len(p.grantList) {
 			grant := p.grantList[p.cursor]
-			p.grants.DeleteGrant(grant.ID)
+			if err := p.grants.DeleteGrant(grant.ID); err != nil {
+				p.statusMsg = fmt.Sprintf("Error deleting grant: %v", err)
+				return p, nil
+			}
 			p.statusMsg = fmt.Sprintf("Deleted %s %s grant", grant.Ticker, strings.ToUpper(grant.GrantType))
 			return p, p.Init()
 		}
@@ -334,8 +355,12 @@ func (p *PortfolioModel) newBuyForm() FormModel {
 		}
 
 		priceCents := int64(math.Round(price * 100))
-		ps.BuyLot(accountID, ticker, shares, priceCents, date, note)
-		priceSvc.FetchPrice(ticker)
+		if _, err := ps.BuyLot(accountID, ticker, shares, priceCents, date, note); err != nil {
+			return nil, fmt.Sprintf("Error buying lot: %v", err)
+		}
+		if _, err := priceSvc.FetchPrice(ticker); err != nil {
+			return nil, fmt.Sprintf("Error fetching price for %s: %v", ticker, err)
+		}
 
 		return func() tea.Msg {
 			summary, _ := ps.GetPortfolio(filterAccID)
@@ -510,8 +535,30 @@ func (p PortfolioModel) View() string {
 		sb.WriteString(p.viewVestSchedule())
 	}
 
-	if p.statusMsg != "" {
+	if p.confirmDelete {
+		deleteMsg := ""
+		switch p.subView {
+		case PortfolioPositions:
+			if p.summary != nil && p.cursor < len(p.summary.Positions) {
+				pos := p.summary.Positions[p.cursor]
+				deleteMsg = fmt.Sprintf("Delete all %s lots (%s)? y/N", pos.Ticker, fmtMoney(pos.MarketValue))
+			}
+		case PortfolioGrants:
+			if p.cursor < len(p.grantList) {
+				g := p.grantList[p.cursor]
+				deleteMsg = fmt.Sprintf("Delete %s %s grant? y/N", g.Ticker, strings.ToUpper(g.GrantType))
+			}
+		}
+		if deleteMsg != "" {
+			sb.WriteString("\n  " + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).Render(deleteMsg))
+		}
+	} else if p.statusMsg != "" {
 		sb.WriteString("\n  " + lipgloss.NewStyle().Foreground(special).Render(p.statusMsg))
+	} else {
+		listLen := p.currentListLen()
+		if listLen > 0 {
+			sb.WriteString(fmt.Sprintf("\n  [%d/%d]", p.cursor+1, listLen))
+		}
 	}
 
 	return sb.String()
@@ -542,9 +589,9 @@ func (p PortfolioModel) viewPositions() string {
 	if p.summary.TotalCostBasis > 0 {
 		pct = float64(p.summary.TotalGainLoss) / float64(p.summary.TotalCostBasis) * 100
 	}
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("Portfolio — $%.2f", float64(p.summary.TotalValue)/100)))
-	sb.WriteString("  " + gainStyle.Render(fmt.Sprintf("(%s$%.2f / %s%.1f%%)",
-		gainSign, float64(p.summary.TotalGainLoss)/100, gainSign, pct)))
+	sb.WriteString(headerStyle.Render(fmt.Sprintf("Portfolio — %s", fmtMoney(p.summary.TotalValue))))
+	sb.WriteString("  " + gainStyle.Render(fmt.Sprintf("(%s / %s%.1f%%)",
+		fmtMoneySign(p.summary.TotalGainLoss), gainSign, pct)))
 	sb.WriteString("\n\n")
 
 	// Positions table
@@ -553,17 +600,15 @@ func (p PortfolioModel) viewPositions() string {
 	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(muted).Render(hdr) + "\n")
 
 	for i, pos := range p.summary.Positions {
-		glSign := "+"
 		glStyle := greenStyle
 		if pos.GainLoss < 0 {
-			glSign = ""
 			glStyle = redStyle
 		}
-		line := fmt.Sprintf("  %-8s  %10.4f  $%9.2f  $%9.2f  $%11.2f  %s",
+		line := fmt.Sprintf("  %-8s  %10.4f  %10s  %10s  %12s  %s",
 			pos.Ticker, pos.TotalShares,
-			float64(pos.AvgCostBasis)/100, float64(pos.CurrentPrice)/100,
-			float64(pos.MarketValue)/100,
-			glStyle.Render(fmt.Sprintf("%s$%.2f (%.1f%%)", glSign, float64(pos.GainLoss)/100, pos.GainPct)))
+			fmtMoney(pos.AvgCostBasis), fmtMoney(pos.CurrentPrice),
+			fmtMoney(pos.MarketValue),
+			glStyle.Render(fmt.Sprintf("%s (%.1f%%)", fmtMoneySign(pos.GainLoss), pos.GainPct)))
 
 		if i == p.cursor {
 			line = selectedRowStyle.Render(line)
@@ -580,15 +625,13 @@ func (p PortfolioModel) viewPositions() string {
 				lotGL := ""
 				if lot.GainLoss != 0 {
 					lotGLStyle := greenStyle
-					lotGLSign := "+"
 					if lot.GainLoss < 0 {
 						lotGLStyle = redStyle
-						lotGLSign = ""
 					}
-					lotGL = "  " + lotGLStyle.Render(fmt.Sprintf("%s$%.2f", lotGLSign, float64(lot.GainLoss)/100))
+					lotGL = "  " + lotGLStyle.Render(fmtMoneySign(lot.GainLoss))
 				}
-				sb.WriteString(fmt.Sprintf("    %s lot#%d  %.4f sh  $%.2f basis  %s  %s%s\n",
-					prefix, lot.ID, lot.Shares, float64(lot.CostBasis)/100, lot.DateAcquired, lot.Source, lotGL))
+				sb.WriteString(fmt.Sprintf("    %s lot#%d  %.4f sh  %s basis  %s  %s%s\n",
+					prefix, lot.ID, lot.Shares, fmtMoney(lot.CostBasis), lot.DateAcquired, lot.Source, lotGL))
 			}
 		} else if i == p.cursor && len(pos.Lots) > 1 {
 			sb.WriteString(lipgloss.NewStyle().Foreground(muted).Render(
@@ -620,10 +663,10 @@ func (p PortfolioModel) viewGrants() string {
 		typeStr := strings.ToUpper(g.GrantType)
 		details := ""
 		if g.StrikePrice != nil {
-			details += fmt.Sprintf("  strike $%.2f", float64(*g.StrikePrice)/100)
+			details += fmt.Sprintf("  strike %s", fmtMoney(*g.StrikePrice))
 		}
 		if g.FMVAtGrant != nil {
-			details += fmt.Sprintf("  FMV $%.2f", float64(*g.FMVAtGrant)/100)
+			details += fmt.Sprintf("  FMV %s", fmtMoney(*g.FMVAtGrant))
 		}
 		if g.VestingStartDate != "" && g.VestingStartDate != g.GrantDate {
 			details += fmt.Sprintf("  vest from %s", g.VestingStartDate)
@@ -693,7 +736,7 @@ func (p PortfolioModel) viewVestSchedule() string {
 
 		fmvStr := ""
 		if e.FMVPerShare != nil {
-			fmvStr = fmt.Sprintf("  FMV $%.2f", float64(*e.FMVPerShare)/100)
+			fmvStr = fmt.Sprintf("  FMV %s", fmtMoney(*e.FMVPerShare))
 		}
 
 		line := fmt.Sprintf("  %-4d  %-12s  %12.2f  %12.0f  %s%s",

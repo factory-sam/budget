@@ -56,14 +56,14 @@ var recurringAddCmd = &cobra.Command{
 
 		cents := int64(math.Round(amount * 100))
 		rule := model.RecurringRule{
-			AccountID: acc.ID,
+			AccountID:  acc.ID,
 			CategoryID: catID,
-			Amount:    cents,
-			Payee:     payee,
-			Frequency: model.Frequency(freq),
-			StartDate: start,
-			NextDue:   start,
-			Type:      model.TxType(txType),
+			Amount:     cents,
+			Payee:      payee,
+			Frequency:  model.Frequency(freq),
+			StartDate:  start,
+			NextDue:    start,
+			Type:       model.TxType(txType),
 		}
 
 		created, err := service.CreateRecurringRule(rule)
@@ -84,7 +84,7 @@ var recurringListCmd = &cobra.Command{
 			return err
 		}
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(rules)
 		}
 		if len(rules) == 0 {

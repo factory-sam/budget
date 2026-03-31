@@ -57,12 +57,12 @@ func (f FormModel) Update(msg tea.Msg) (FormModel, tea.Cmd) {
 		field := &f.Fields[f.focused]
 
 		switch msg.String() {
-		case "esc":
+		case keyEsc:
 			f.active = false
 			f.err = ""
 			return f, nil
 
-		case "tab", "down":
+		case "tab", keyDown:
 			if f.focused < len(f.Fields)-1 {
 				f.focused++
 			}
@@ -72,7 +72,7 @@ func (f FormModel) Update(msg tea.Msg) (FormModel, tea.Cmd) {
 				f.focused--
 			}
 
-		case "enter":
+		case keyEnter:
 			// if not on last field, advance
 			if f.focused < len(f.Fields)-1 {
 				f.focused++
@@ -90,14 +90,14 @@ func (f FormModel) Update(msg tea.Msg) (FormModel, tea.Cmd) {
 				return f, cmd
 			}
 
-		case "backspace":
+		case keyBackspace:
 			if len(field.Options) == 0 && len(field.Value) > 0 {
 				field.Value = field.Value[:len(field.Value)-1]
 			}
 
-		case "left", "right":
+		case keyLeft, keyRight:
 			if len(field.Options) > 0 {
-				if msg.String() == "right" {
+				if msg.String() == keyRight {
 					field.optionIdx = (field.optionIdx + 1) % len(field.Options)
 				} else {
 					field.optionIdx = (field.optionIdx - 1 + len(field.Options)) % len(field.Options)
@@ -175,6 +175,6 @@ func (f FormModel) View() string {
 		sb.WriteString("\n  " + redStyle.Render(f.err) + "\n")
 	}
 
-	sb.WriteString("\n  " + lipgloss.NewStyle().Foreground(muted).Render("tab/↓:next  shift+tab/↑:prev  enter:submit  esc:cancel"))
+	sb.WriteString("\n  " + lipgloss.NewStyle().Foreground(muted).Render(helpFormNav))
 	return sb.String()
 }

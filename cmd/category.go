@@ -24,7 +24,7 @@ var categoryListCmd = &cobra.Command{
 			return err
 		}
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(cats)
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

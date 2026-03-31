@@ -45,7 +45,9 @@ func (p *PriceService) FetchPrice(ticker string) (int64, error) {
 	}
 
 	// cache it
-	p.db.Exec("INSERT OR REPLACE INTO equity_prices (ticker, date, price) VALUES (?, ?, ?)", ticker, today, price)
+	if _, err := p.db.Exec("INSERT OR REPLACE INTO equity_prices (ticker, date, price) VALUES (?, ?, ?)", ticker, today, price); err != nil {
+		return price, nil // return price even if caching fails
+	}
 	return price, nil
 }
 
@@ -78,7 +80,9 @@ func (p *PriceService) GetHistoricalPrices(ticker string, limit int) ([]model.Eq
 	var prices []model.EquityPrice
 	for rows.Next() {
 		var ep model.EquityPrice
-		rows.Scan(&ep.ID, &ep.Ticker, &ep.Date, &ep.Price)
+		if err := rows.Scan(&ep.ID, &ep.Ticker, &ep.Date, &ep.Price); err != nil {
+			continue
+		}
 		prices = append(prices, ep)
 	}
 	return prices, nil

@@ -93,7 +93,7 @@ var txAddCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(created)
 		}
 		fmt.Printf("Added transaction #%d: $%.2f to %s (%s)\n", created.ID, amount, payee, date)
@@ -136,7 +136,7 @@ var txListCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(txs)
 		}
 

@@ -35,7 +35,9 @@ func (c *CSVImporter) Import(path string, accountID int64) (int, error) {
 		return 0, err
 	}
 	var existing int
-	c.svc.DB().QueryRow("SELECT COUNT(*) FROM import_records WHERE hash = ?", hash).Scan(&existing)
+	if err := c.svc.DB().QueryRow("SELECT COUNT(*) FROM import_records WHERE hash = ?", hash).Scan(&existing); err != nil {
+		existing = 0
+	}
 	if existing > 0 {
 		return 0, fmt.Errorf("file already imported (hash: %s)", hash[:12])
 	}
@@ -73,52 +75,9 @@ func (c *CSVImporter) Import(path string, accountID int64) (int, error) {
 
 	count := 0
 	for _, record := range allRecords[headerIdx+1:] {
-
-		date := ""
-		if colMap.date >= 0 && colMap.date < len(record) {
-			date = normalizeDate(record[colMap.date])
-		}
-
-		amountStr := ""
-		if colMap.amount >= 0 && colMap.amount < len(record) {
-			amountStr = record[colMap.amount]
-		}
-		amount, txType := parseAmount(amountStr)
-		if amount == 0 {
+		tx, ok := c.processRecord(record, colMap, accountID)
+		if !ok {
 			continue
-		}
-
-		payee := ""
-		if colMap.payee >= 0 && colMap.payee < len(record) {
-			payee = strings.TrimSpace(record[colMap.payee])
-		}
-		if payee == "" && colMap.description >= 0 && colMap.description < len(record) {
-			payee = strings.TrimSpace(record[colMap.description])
-		}
-
-		note := ""
-		if colMap.memo >= 0 && colMap.memo < len(record) {
-			note = strings.TrimSpace(record[colMap.memo])
-		}
-
-		catID := c.svc.AutoCategorize(payee)
-
-		// Credit card payments are transfers, not expenses
-		if catID != nil {
-			cat, _ := c.svc.FindCategoryByName("Credit Card Payment")
-			if cat != nil && *catID == cat.ID {
-				txType = model.TxTransfer
-			}
-		}
-
-		tx := model.Transaction{
-			AccountID:  accountID,
-			CategoryID: catID,
-			Amount:     amount,
-			Date:       date,
-			Payee:      payee,
-			Note:       note,
-			Type:       txType,
 		}
 		if _, err := c.svc.CreateTransaction(tx); err != nil {
 			continue
@@ -126,8 +85,60 @@ func (c *CSVImporter) Import(path string, accountID int64) (int, error) {
 		count++
 	}
 
-	c.svc.DB().Exec("INSERT INTO import_records (filename, hash, tx_count) VALUES (?, ?, ?)", path, hash, count)
+	if _, err := c.svc.DB().Exec("INSERT INTO import_records (filename, hash, tx_count) VALUES (?, ?, ?)", path, hash, count); err != nil {
+		return count, fmt.Errorf("record import: %w", err)
+	}
 	return count, nil
+}
+
+func (c *CSVImporter) processRecord(record []string, colMap columnMap, accountID int64) (model.Transaction, bool) {
+	date := ""
+	if colMap.date >= 0 && colMap.date < len(record) {
+		date = normalizeDate(record[colMap.date])
+	}
+
+	amountStr := ""
+	if colMap.amount >= 0 && colMap.amount < len(record) {
+		amountStr = record[colMap.amount]
+	}
+	amount, txType := parseAmount(amountStr)
+	if amount == 0 {
+		return model.Transaction{}, false
+	}
+
+	payee := ""
+	if colMap.payee >= 0 && colMap.payee < len(record) {
+		payee = strings.TrimSpace(record[colMap.payee])
+	}
+	if payee == "" && colMap.description >= 0 && colMap.description < len(record) {
+		payee = strings.TrimSpace(record[colMap.description])
+	}
+
+	note := ""
+	if colMap.memo >= 0 && colMap.memo < len(record) {
+		note = strings.TrimSpace(record[colMap.memo])
+	}
+
+	catID := c.svc.AutoCategorize(payee)
+
+	// Credit card payments are transfers, not expenses
+	if catID != nil {
+		cat, _ := c.svc.FindCategoryByName("Credit Card Payment")
+		if cat != nil && *catID == cat.ID {
+			txType = model.TxTransfer
+		}
+	}
+
+	tx := model.Transaction{
+		AccountID:  accountID,
+		CategoryID: catID,
+		Amount:     amount,
+		Date:       date,
+		Payee:      payee,
+		Note:       note,
+		Type:       txType,
+	}
+	return tx, true
 }
 
 type columnMap struct {
@@ -219,6 +230,8 @@ func fileHash(path string) (string, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	io.Copy(h, f)
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }

@@ -44,10 +44,10 @@ const (
 type Frequency string
 
 const (
-	FreqWeekly    Frequency = "weekly"
-	FreqBiweekly  Frequency = "biweekly"
-	FreqMonthly   Frequency = "monthly"
-	FreqYearly    Frequency = "yearly"
+	FreqWeekly   Frequency = "weekly"
+	FreqBiweekly Frequency = "biweekly"
+	FreqMonthly  Frequency = "monthly"
+	FreqYearly   Frequency = "yearly"
 )
 
 type Account struct {
@@ -92,12 +92,12 @@ type Transaction struct {
 }
 
 type Budget struct {
-	ID          int64  `json:"id"`
-	CategoryID  int64  `json:"category_id"`
+	ID           int64  `json:"id"`
+	CategoryID   int64  `json:"category_id"`
 	CategoryName string `json:"category_name,omitempty"`
-	Year        int    `json:"year"`
-	Month       int    `json:"month"`
-	AmountLimit int64  `json:"amount_limit"` // cents
+	Year         int    `json:"year"`
+	Month        int    `json:"month"`
+	AmountLimit  int64  `json:"amount_limit"` // cents
 }
 
 type BudgetStatus struct {
@@ -108,19 +108,19 @@ type BudgetStatus struct {
 }
 
 type RecurringRule struct {
-	ID         int64     `json:"id"`
-	AccountID  int64     `json:"account_id"`
-	AccountName string   `json:"account_name,omitempty"`
-	CategoryID *int64    `json:"category_id"`
-	CategoryName string  `json:"category_name,omitempty"`
-	Amount     int64     `json:"amount"`
-	Payee      string    `json:"payee"`
-	Note       string    `json:"note"`
-	Frequency  Frequency `json:"frequency"`
-	StartDate  string    `json:"start_date"`
-	EndDate    *string   `json:"end_date,omitempty"`
-	NextDue    string    `json:"next_due"`
-	Type       TxType    `json:"type"`
+	ID           int64     `json:"id"`
+	AccountID    int64     `json:"account_id"`
+	AccountName  string    `json:"account_name,omitempty"`
+	CategoryID   *int64    `json:"category_id"`
+	CategoryName string    `json:"category_name,omitempty"`
+	Amount       int64     `json:"amount"`
+	Payee        string    `json:"payee"`
+	Note         string    `json:"note"`
+	Frequency    Frequency `json:"frequency"`
+	StartDate    string    `json:"start_date"`
+	EndDate      *string   `json:"end_date,omitempty"`
+	NextDue      string    `json:"next_due"`
+	Type         TxType    `json:"type"`
 }
 
 type NetWorthSnapshot struct {
@@ -133,9 +133,9 @@ type NetWorthSnapshot struct {
 }
 
 type AutoCatRule struct {
-	ID         int64  `json:"id"`
-	Pattern    string `json:"pattern"` // substring match on payee
-	CategoryID int64  `json:"category_id"`
+	ID           int64  `json:"id"`
+	Pattern      string `json:"pattern"` // substring match on payee
+	CategoryID   int64  `json:"category_id"`
 	CategoryName string `json:"category_name,omitempty"`
 }
 
@@ -173,7 +173,7 @@ type EquityGrant struct {
 	GrantType        string  `json:"grant_type"` // iso, rsu
 	TotalShares      float64 `json:"total_shares"`
 	GrantDate        string  `json:"grant_date"`
-	VestingStartDate string  `json:"vesting_start_date"` // when vesting clock starts (may differ from grant date)
+	VestingStartDate string  `json:"vesting_start_date"`     // when vesting clock starts (may differ from grant date)
 	FMVAtGrant       *int64  `json:"fmv_at_grant,omitempty"` // cents, FMV per share at grant date
 	StrikePrice      *int64  `json:"strike_price,omitempty"` // cents, ISOs only
 	ExpirationDate   *string `json:"expiration_date,omitempty"`
@@ -209,10 +209,10 @@ type PositionSummary struct {
 }
 
 type PortfolioSummary struct {
-	TotalValue    int64             `json:"total_value"`
-	TotalCostBasis int64           `json:"total_cost_basis"`
-	TotalGainLoss int64            `json:"total_gain_loss"`
-	Positions     []PositionSummary `json:"positions"`
+	TotalValue     int64             `json:"total_value"`
+	TotalCostBasis int64             `json:"total_cost_basis"`
+	TotalGainLoss  int64             `json:"total_gain_loss"`
+	Positions      []PositionSummary `json:"positions"`
 }
 
 type Contribution401k struct {

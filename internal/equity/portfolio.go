@@ -91,8 +91,10 @@ func (p *PortfolioService) ListLots(ticker string, accountID *int64) ([]model.Eq
 	for rows.Next() {
 		var l model.EquityLot
 		var inclNW int
-		rows.Scan(&l.ID, &l.AccountID, &l.AccountName, &l.Ticker, &l.Shares, &l.CostBasis,
-			&l.DateAcquired, &l.Source, &l.GrantID, &inclNW, &l.Note)
+		if err := rows.Scan(&l.ID, &l.AccountID, &l.AccountName, &l.Ticker, &l.Shares, &l.CostBasis,
+			&l.DateAcquired, &l.Source, &l.GrantID, &inclNW, &l.Note); err != nil {
+			continue
+		}
 		l.IncludeInNetWorth = inclNW == 1
 
 		price, err := p.prices.GetCachedPrice(l.Ticker)
@@ -178,7 +180,9 @@ func (p *PortfolioService) EquityValueForNetWorth() (int64, error) {
 	for rows.Next() {
 		var ticker string
 		var shares float64
-		rows.Scan(&ticker, &shares)
+		if err := rows.Scan(&ticker, &shares); err != nil {
+			continue
+		}
 		price, err := p.prices.GetCachedPrice(ticker)
 		if err != nil {
 			continue
@@ -200,7 +204,9 @@ func (p *PortfolioService) EquityValueForAccount(accountID int64) (int64, error)
 	for rows.Next() {
 		var ticker string
 		var shares float64
-		rows.Scan(&ticker, &shares)
+		if err := rows.Scan(&ticker, &shares); err != nil {
+			continue
+		}
 		price, err := p.prices.GetCachedPrice(ticker)
 		if err != nil {
 			continue
@@ -220,7 +226,9 @@ func (p *PortfolioService) GetDistinctTickers() ([]string, error) {
 	var tickers []string
 	for rows.Next() {
 		var t string
-		rows.Scan(&t)
+		if err := rows.Scan(&t); err != nil {
+			continue
+		}
 		tickers = append(tickers, t)
 	}
 	return tickers, nil

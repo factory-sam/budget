@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
 	"github.com/sam/budget/internal/model"
 	"github.com/sam/budget/internal/service"
 )
@@ -148,15 +148,15 @@ func (r ReportsModel) viewSpending() string {
 		empty := barWidth - filled
 		bar := lipgloss.NewStyle().Foreground(highlight).Render(strings.Repeat("█", filled)) + strings.Repeat("░", empty)
 
-		sb.WriteString(fmt.Sprintf("  %-18s  $%8.2f  %5.1f%%  %s\n",
-			truncStr(sp.CategoryName, 18), float64(sp.Amount)/100, sp.Percent, bar))
+		sb.WriteString(fmt.Sprintf("  %-18s  %10s  %5.1f%%  %s\n",
+			truncStr(sp.CategoryName, 18), fmtMoney(sp.Amount), sp.Percent, bar))
 	}
 
 	var total int64
 	for _, sp := range r.spending {
 		total += sp.Amount
 	}
-	sb.WriteString(fmt.Sprintf("\n  Total: $%.2f\n", float64(total)/100))
+	sb.WriteString(fmt.Sprintf("\n  Total: %s\n", fmtMoney(total)))
 	return sb.String()
 }
 
@@ -175,7 +175,7 @@ func (r ReportsModel) viewIncome() string {
 		grandTotal += p.Total
 	}
 	sb.WriteString(fmt.Sprintf("  Total: %s\n\n",
-		greenStyle.Render(fmt.Sprintf("$%.2f", float64(grandTotal)/100))))
+		greenStyle.Render(fmtMoney(grandTotal))))
 
 	barWidth := r.width - 55
 	if barWidth < 15 {
@@ -198,7 +198,7 @@ func (r ReportsModel) viewIncome() string {
 	for _, p := range r.income {
 		sb.WriteString(fmt.Sprintf("  %s  %s\n",
 			lipgloss.NewStyle().Bold(true).Render(p.Period),
-			greenStyle.Render(fmt.Sprintf("$%.2f", float64(p.Total)/100))))
+			greenStyle.Render(fmtMoney(p.Total))))
 
 		for _, s := range p.Sources {
 			bar := 0
@@ -213,7 +213,7 @@ func (r ReportsModel) viewIncome() string {
 				truncStr(s.CategoryName, 18),
 				greenStyle.Render(strings.Repeat("█", bar)),
 				pad,
-				greenStyle.Render(fmt.Sprintf("$%.2f", float64(s.Amount)/100)),
+				greenStyle.Render(fmtMoney(s.Amount)),
 				s.Percent))
 		}
 		sb.WriteString("\n")
@@ -261,21 +261,19 @@ func (r ReportsModel) viewCashFlow() string {
 		totNetStyle = redStyle
 	}
 	sb.WriteString(fmt.Sprintf("  Total Income: %s  Expenses: %s  Net: %s\n\n",
-		greenStyle.Render(fmt.Sprintf("$%.2f", float64(totalInc)/100)),
-		redStyle.Render(fmt.Sprintf("$%.2f", float64(totalExp)/100)),
-		totNetStyle.Render(fmt.Sprintf("$%.2f", float64(totalNet)/100))))
+		greenStyle.Render(fmtMoney(totalInc)),
+		redStyle.Render(fmtMoney(totalExp)),
+		totNetStyle.Render(fmtMoney(totalNet))))
 
 	for _, cf := range r.cashflow {
 		// Month header with net
 		netStyle := greenStyle
-		netSign := "+"
 		if cf.Net < 0 {
 			netStyle = redStyle
-			netSign = ""
 		}
 		sb.WriteString(fmt.Sprintf("  %s  net %s\n",
 			lipgloss.NewStyle().Bold(true).Render(cf.Month),
-			netStyle.Render(fmt.Sprintf("%s$%.2f", netSign, float64(cf.Net)/100))))
+			netStyle.Render(fmtMoneySign(cf.Net))))
 
 		// Income bar
 		incBar := 0
@@ -288,7 +286,7 @@ func (r ReportsModel) viewCashFlow() string {
 		sb.WriteString(fmt.Sprintf("    %s %s  %s\n",
 			lipgloss.NewStyle().Foreground(muted).Render("IN "),
 			greenStyle.Render(strings.Repeat("█", incBar)+strings.Repeat("░", barWidth-incBar)),
-			greenStyle.Render(fmt.Sprintf("$%.2f", float64(cf.Income)/100))))
+			greenStyle.Render(fmtMoney(cf.Income))))
 
 		// Expense bar
 		expBar := 0
@@ -301,7 +299,7 @@ func (r ReportsModel) viewCashFlow() string {
 		sb.WriteString(fmt.Sprintf("    %s %s  %s\n",
 			lipgloss.NewStyle().Foreground(muted).Render("OUT"),
 			redStyle.Render(strings.Repeat("█", expBar)+strings.Repeat("░", barWidth-expBar)),
-			redStyle.Render(fmt.Sprintf("$%.2f", float64(cf.Expenses)/100))))
+			redStyle.Render(fmtMoney(cf.Expenses))))
 
 		sb.WriteString("\n")
 	}
@@ -352,17 +350,15 @@ func (r ReportsModel) viewNetWorthHistory() string {
 	first := r.nwHistory[len(r.nwHistory)-1] // oldest
 	change := latest.NetWorth - first.NetWorth
 	changeStyle := greenStyle
-	changeSign := "+"
 	if change < 0 {
 		changeStyle = redStyle
-		changeSign = ""
 	}
 	sb.WriteString(fmt.Sprintf("  Current: %s  |  Change: %s  |  Period: %s to %s\n",
-		greenStyle.Bold(true).Render(fmt.Sprintf("$%.2f", float64(latest.NetWorth)/100)),
-		changeStyle.Render(fmt.Sprintf("%s$%.2f", changeSign, float64(change)/100)),
+		greenStyle.Bold(true).Render(fmtMoney(latest.NetWorth)),
+		changeStyle.Render(fmtMoneySign(change)),
 		first.Date, latest.Date))
-	sb.WriteString(fmt.Sprintf("  Assets: $%.2f  |  Investments: $%.2f  |  Liabilities: $%.2f\n",
-		float64(latest.TotalAssets)/100, float64(latest.EquityValue)/100, float64(latest.TotalLiabilities)/100))
+	sb.WriteString(fmt.Sprintf("  Assets: %s  |  Investments: %s  |  Liabilities: %s\n",
+		fmtMoney(latest.TotalAssets), fmtMoney(latest.EquityValue), fmtMoney(latest.TotalLiabilities)))
 
 	return sb.String()
 }

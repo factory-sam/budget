@@ -1,0 +1,32 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      glob: "*.go"
+      run: |
+        LINT=$(command -v golangci-lint || echo "$HOME/go/bin/golangci-lint")
+        "$LINT" run ./...
+    fmt-check:
+      glob: "*.go"
+      run: gofmt -l {staged_files}
+      fail_text: "Files not formatted. Run: gofmt -w ."
+    build:
+      glob: "*.go"
+      run: go build ./...
+    tidy:
+      glob: "*.go"
+      run: go mod tidy && git diff --exit-code go.mod go.sum
+      fail_text: "go.mod/go.sum changed. Run: go mod tidy"
+    large-files:
+      run: |
+        for file in {staged_files}; do
+          size=$(wc -c < "$file" 2>/dev/null || echo 0)
+          if [ "$size" -gt 1048576 ]; then
+            echo "ERROR: $file is larger than 1MB ($size bytes)"
+            exit 1
+          fi
+          lines=$(wc -l < "$file" 2>/dev/null || echo 0)
+          if [ "$lines" -gt 2000 ]; then
+            echo "WARNING: $file has $lines lines (>2000)"
+          fi
+        done

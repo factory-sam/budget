@@ -31,7 +31,9 @@ func (o *OFXImporter) Import(path string, accountID int64) (int, error) {
 		return 0, err
 	}
 	var existing int
-	o.svc.DB().QueryRow("SELECT COUNT(*) FROM import_records WHERE hash = ?", hash).Scan(&existing)
+	if err := o.svc.DB().QueryRow("SELECT COUNT(*) FROM import_records WHERE hash = ?", hash).Scan(&existing); err != nil {
+		existing = 0
+	}
 	if existing > 0 {
 		return 0, fmt.Errorf("file already imported (hash: %s)", hash[:12])
 	}
@@ -111,6 +113,8 @@ func (o *OFXImporter) Import(path string, accountID int64) (int, error) {
 		}
 	}
 
-	o.svc.DB().Exec("INSERT INTO import_records (filename, hash, tx_count) VALUES (?, ?, ?)", path, hash, count)
+	if _, err := o.svc.DB().Exec("INSERT INTO import_records (filename, hash, tx_count) VALUES (?, ?, ?)", path, hash, count); err != nil {
+		return count, fmt.Errorf("record import: %w", err)
+	}
 	return count, nil
 }

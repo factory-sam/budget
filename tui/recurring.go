@@ -18,9 +18,11 @@ type RecurringModel struct {
 	rules         []model.RecurringRule
 	cursor        int
 	form          FormModel
+	confirmDelete bool
+	statusMsg     string
 }
 
-func (r RecurringModel) InputActive() bool { return r.form.Active() }
+func (r RecurringModel) InputActive() bool { return r.form.Active() || r.confirmDelete }
 
 func NewRecurringModel(svc *service.Service) RecurringModel {
 	return RecurringModel{svc: svc}
@@ -49,8 +51,26 @@ func (r RecurringModel) Update(msg tea.Msg) (RecurringModel, tea.Cmd) {
 		r.rules = msg.rules
 		r.cursor = 0
 	case tea.KeyMsg:
+		r.statusMsg = ""
+		if r.confirmDelete {
+			switch msg.String() {
+			case "y", "Y":
+				r.confirmDelete = false
+				if r.cursor < len(r.rules) {
+					if err := r.svc.DeleteRecurringRule(r.rules[r.cursor].ID); err != nil {
+						r.statusMsg = fmt.Sprintf("Error deleting rule: %v", err)
+						return r, nil
+					}
+					return r, r.Init()
+				}
+			default:
+				r.confirmDelete = false
+			}
+			return r, nil
+		}
+
 		switch msg.String() {
-		case "j", "down":
+		case "j", keyDown:
 			if r.cursor < len(r.rules)-1 {
 				r.cursor++
 			}
@@ -68,8 +88,7 @@ func (r RecurringModel) Update(msg tea.Msg) (RecurringModel, tea.Cmd) {
 			r.form = r.newAddForm()
 		case "d":
 			if len(r.rules) > 0 && r.cursor < len(r.rules) {
-				r.svc.DeleteRecurringRule(r.rules[r.cursor].ID)
-				return r, r.Init()
+				r.confirmDelete = true
 			}
 		}
 	}
@@ -129,16 +148,18 @@ func (r *RecurringModel) newAddForm() FormModel {
 		}
 
 		rule := model.RecurringRule{
-			AccountID: acc.ID,
+			AccountID:  acc.ID,
 			CategoryID: catID,
-			Amount:    cents,
-			Payee:     payee,
-			Frequency: model.Frequency(freq),
-			StartDate: startDate,
-			NextDue:   startDate,
-			Type:      model.TxType(txType),
+			Amount:     cents,
+			Payee:      payee,
+			Frequency:  model.Frequency(freq),
+			StartDate:  startDate,
+			NextDue:    startDate,
+			Type:       model.TxType(txType),
 		}
-		svc.CreateRecurringRule(rule)
+		if _, err := svc.CreateRecurringRule(rule); err != nil {
+			return nil, fmt.Sprintf("Error creating rule: %v", err)
+		}
 
 		return func() tea.Msg {
 			rules, _ := svc.ListRecurringRules()
@@ -161,8 +182,7 @@ func (r RecurringModel) View() string {
 	sb.WriteString(headerStyle.Render("Recurring Transactions") + "\n\n")
 
 	if len(r.rules) == 0 {
-		sb.WriteString("  No recurring rules. Add one with:\n")
-		sb.WriteString("  budget recurring add --payee \"Netflix\" --amount 15.99 --freq monthly --account checking --start 2026-01-01\n")
+		sb.WriteString("  No recurring rules. Press 'a' to add one.\n")
 		return sb.String()
 	}
 
@@ -171,9 +191,9 @@ func (r RecurringModel) View() string {
 	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(muted).Render(hdr) + "\n")
 
 	for i, rule := range r.rules {
-		line := fmt.Sprintf("  %-20s  $%9.2f  %-10s  %-12s  %-15s  %-15s",
+		line := fmt.Sprintf("  %-20s  %10s  %-10s  %-12s  %-15s  %-15s",
 			truncStr(rule.Payee, 20),
-			float64(rule.Amount)/100,
+			fmtMoney(rule.Amount),
 			rule.Frequency,
 			rule.NextDue,
 			truncStr(rule.AccountName, 15),
@@ -185,6 +205,15 @@ func (r RecurringModel) View() string {
 		sb.WriteString(line + "\n")
 	}
 
-	sb.WriteString(fmt.Sprintf("\n  %d rules | j/k:navigate  d:delete", len(r.rules)))
+	if r.confirmDelete && r.cursor < len(r.rules) {
+		rule := r.rules[r.cursor]
+		sb.WriteString(fmt.Sprintf("\n  %s",
+			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).
+				Render(fmt.Sprintf("Delete recurring rule %q (%s)? y/N", rule.Payee, fmtMoney(rule.Amount)))))
+	} else if r.statusMsg != "" {
+		sb.WriteString("\n  " + lipgloss.NewStyle().Foreground(danger).Render(r.statusMsg))
+	} else {
+		sb.WriteString(fmt.Sprintf("\n  %d rules [%d/%d]", len(r.rules), r.cursor+1, len(r.rules)))
+	}
 	return sb.String()
 }

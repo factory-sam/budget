@@ -18,19 +18,19 @@ type TransactionsModel struct {
 	width, height int
 	txs           []model.Transaction
 	cursor        int
-	offset        int
 	search        string
 	searching     bool
 	filter        model.TxFilter
 	form          FormModel
 	// category picker
-	catPicking    bool
-	catList       []model.Category
-	catFiltered   []model.Category
-	catCursor     int
-	catSearch     string
+	catPicking  bool
+	catList     []model.Category
+	catFiltered []model.Category
+	catCursor   int
+	catSearch   string
 	// delete confirmation
 	confirmDelete bool
+	statusMsg     string
 }
 
 func (t TransactionsModel) InputActive() bool {
@@ -96,19 +96,24 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 		// don't reset cursor on reload (preserve position for categorize/type toggle)
 
 	case tea.KeyMsg:
+		t.statusMsg = ""
 		if t.catPicking {
 			switch msg.String() {
-			case "esc":
+			case keyEsc:
 				t.catPicking = false
-			case "enter":
+			case keyEnter:
 				if len(t.catFiltered) > 0 && t.cursor < len(t.txs) {
 					cat := t.catFiltered[t.catCursor]
 					tx := t.txs[t.cursor]
-					t.svc.UpdateTransactionCategory(tx.ID, &cat.ID)
+					if err := t.svc.UpdateTransactionCategory(tx.ID, &cat.ID); err != nil {
+						t.statusMsg = fmt.Sprintf("Error categorizing: %v", err)
+						t.catPicking = false
+						return t, nil
+					}
 					t.catPicking = false
 					return t, t.Init()
 				}
-			case "j", "down":
+			case "j", keyDown:
 				if t.catCursor < len(t.catFiltered)-1 {
 					t.catCursor++
 				}
@@ -116,7 +121,7 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 				if t.catCursor > 0 {
 					t.catCursor--
 				}
-			case "backspace":
+			case keyBackspace:
 				if len(t.catSearch) > 0 {
 					t.catSearch = t.catSearch[:len(t.catSearch)-1]
 					t.filterCategories()
@@ -135,7 +140,10 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 			case "y", "Y":
 				t.confirmDelete = false
 				if t.cursor < len(t.txs) {
-					t.svc.DeleteTransaction(t.txs[t.cursor].ID)
+					if err := t.svc.DeleteTransaction(t.txs[t.cursor].ID); err != nil {
+						t.statusMsg = fmt.Sprintf("Error deleting transaction: %v", err)
+						return t, nil
+					}
 					return t, t.Init()
 				}
 			default:
@@ -146,16 +154,16 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 
 		if t.searching {
 			switch msg.String() {
-			case "enter":
+			case keyEnter:
 				t.searching = false
 				t.filter.Search = t.search
 				return t, t.Init()
-			case "esc":
+			case keyEsc:
 				t.searching = false
 				t.search = ""
 				t.filter.Search = ""
 				return t, t.Init()
-			case "backspace":
+			case keyBackspace:
 				if len(t.search) > 0 {
 					t.search = t.search[:len(t.search)-1]
 				}
@@ -168,7 +176,7 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "j", "down":
+		case "j", keyDown:
 			if t.cursor < len(t.txs)-1 {
 				t.cursor++
 			}
@@ -210,7 +218,10 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 					break
 				}
 				if newType != "" {
-					t.svc.UpdateTransactionType(tx.ID, newType)
+					if err := t.svc.UpdateTransactionType(tx.ID, newType); err != nil {
+						t.statusMsg = fmt.Sprintf("Error updating type: %v", err)
+						return t, nil
+					}
 					return t, t.Init()
 				}
 			}
@@ -285,7 +296,9 @@ func (t *TransactionsModel) newAddForm() FormModel {
 			Note:       note,
 			Type:       model.TxType(txType),
 		}
-		svc.CreateTransaction(tx)
+		if _, err := svc.CreateTransaction(tx); err != nil {
+			return nil, fmt.Sprintf("Error creating transaction: %v", err)
+		}
 
 		return func() tea.Msg {
 			txs, _ := svc.ListTransactions(filter)
@@ -328,9 +341,23 @@ func (t TransactionsModel) View() string {
 		return b.String()
 	}
 
+	// Responsive column widths
+	payeeW := 25
+	catW := 15
+	acctW := 15
+	if t.width >= 140 {
+		payeeW = 35
+		catW = 20
+		acctW = 20
+	} else if t.width < 100 {
+		payeeW = 18
+		catW = 12
+		acctW = 12
+	}
+
 	// Header
-	hdr := fmt.Sprintf("  %-10s  %-25s  %10s  %-8s  %-15s  %-15s",
-		"DATE", "PAYEE", "AMOUNT", "TYPE", "CATEGORY", "ACCOUNT")
+	hdr := fmt.Sprintf("  %-10s  %-*s  %10s  %-8s  %-*s  %-*s",
+		"DATE", payeeW, "PAYEE", "AMOUNT", "TYPE", catW, "CATEGORY", acctW, "ACCOUNT")
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(muted).Render(hdr) + "\n")
 
 	visible := t.height - 6
@@ -359,13 +386,13 @@ func (t TransactionsModel) View() string {
 			sign = "~"
 			style = lipgloss.NewStyle().Foreground(muted)
 		}
-		rawAmount := fmt.Sprintf("%s$%.2f", sign, float64(tx.Amount)/100)
+		rawAmount := fmt.Sprintf("%s%s", sign, fmtMoney(tx.Amount))
 		paddedAmount := fmt.Sprintf("%10s", rawAmount)
 		amountStr := style.Render(paddedAmount)
 
-		line := fmt.Sprintf("  %-10s  %-25s  %s  %-8s  %-15s  %-15s",
-			tx.Date, truncStr(tx.Payee, 25), amountStr, string(tx.Type),
-			truncStr(tx.CategoryName, 15), truncStr(tx.AccountName, 15))
+		line := fmt.Sprintf("  %-10s  %-*s  %s  %-8s  %-*s  %-*s",
+			tx.Date, payeeW, truncStr(tx.Payee, payeeW), amountStr, string(tx.Type),
+			catW, truncStr(tx.CategoryName, catW), acctW, truncStr(tx.AccountName, acctW))
 
 		if i == t.cursor {
 			line = selectedRowStyle.Render(line)
@@ -377,13 +404,11 @@ func (t TransactionsModel) View() string {
 		tx := t.txs[t.cursor]
 		b.WriteString(fmt.Sprintf("\n  %s",
 			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).
-				Render(fmt.Sprintf("Delete \"%s\" ($%.2f on %s)? y/N", tx.Payee, math.Abs(float64(tx.Amount))/100, tx.Date))))
+				Render(fmt.Sprintf("Delete \"%s\" (%s on %s)? y/N", tx.Payee, fmtMoney(tx.Amount), tx.Date))))
+	} else if t.statusMsg != "" {
+		b.WriteString("\n  " + lipgloss.NewStyle().Foreground(danger).Render(t.statusMsg))
 	} else {
-		uncatLabel := "u:uncategorized"
-		if t.filter.Uncategorized {
-			uncatLabel = "u:show all"
-		}
-		b.WriteString(fmt.Sprintf("\n  %d transactions | j/k:navigate  c:categorize  t:type  %s  /:search  d:delete  g/G:top/bottom", len(t.txs), uncatLabel))
+		b.WriteString(fmt.Sprintf("\n  %d transactions [%d/%d]", len(t.txs), t.cursor+1, len(t.txs)))
 	}
 	return b.String()
 }
@@ -393,8 +418,8 @@ func (t TransactionsModel) viewCategoryPicker() string {
 
 	tx := t.txs[t.cursor]
 	b.WriteString(headerStyle.Render("Categorize Transaction") + "\n")
-	b.WriteString(fmt.Sprintf("  %s  %s  $%.2f\n\n",
-		tx.Date, truncStr(tx.Payee, 40), float64(tx.Amount)/100))
+	b.WriteString(fmt.Sprintf("  %s  %s  %s\n\n",
+		tx.Date, truncStr(tx.Payee, 40), fmtMoney(tx.Amount)))
 	b.WriteString("  Search: " + t.catSearch + "█\n\n")
 
 	visible := t.height - 8

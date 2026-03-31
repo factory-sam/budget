@@ -34,7 +34,7 @@ var accountAddCmd = &cobra.Command{
 			return err
 		}
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(acc)
 		}
 		fmt.Printf("Created account: %s (ID: %d, balance: $%.2f)\n", acc.Name, acc.ID, float64(acc.Balance)/100)
@@ -51,7 +51,7 @@ var accountListCmd = &cobra.Command{
 			return err
 		}
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(accs)
 		}
 		if len(accs) == 0 {

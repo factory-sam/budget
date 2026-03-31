@@ -79,7 +79,7 @@ func (s *Service) GetAccountByName(name string) (*model.Account, error) {
 }
 
 func (s *Service) ListInvestmentAccounts() ([]model.Account, error) {
-	rows, err := s.db.Query("SELECT "+accountCols+" FROM accounts WHERE type IN ('investment','brokerage','401k','managed') ORDER BY name")
+	rows, err := s.db.Query("SELECT " + accountCols + " FROM accounts WHERE type IN ('investment','brokerage','401k','managed') ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,9 @@ func (s *Service) CreateTransaction(tx model.Transaction) (*model.Transaction, e
 	if tx.Type == model.TxExpense || tx.Type == model.TxTransfer {
 		delta = -delta
 	}
-	s.UpdateAccountBalance(tx.AccountID, delta)
+	if err := s.UpdateAccountBalance(tx.AccountID, delta); err != nil {
+		return nil, fmt.Errorf("update balance: %w", err)
+	}
 
 	return &tx, nil
 }
@@ -503,7 +505,9 @@ func (s *Service) GenerateRecurring() (int, error) {
 
 		// advance next_due
 		next := advanceDate(r.NextDue, r.Frequency)
-		s.db.Exec("UPDATE recurring_rules SET next_due = ? WHERE id = ?", next, r.ID)
+		if _, err := s.db.Exec("UPDATE recurring_rules SET next_due = ? WHERE id = ?", next, r.ID); err != nil {
+			return count, fmt.Errorf("advance recurring rule: %w", err)
+		}
 	}
 	return count, nil
 }
@@ -593,7 +597,9 @@ var GetAccountEquityValue AccountEquityValueFunc
 
 func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
 	// Refresh investment account balances from portfolio values
-	s.RecalculateAllBalances()
+	if err := s.RecalculateAllBalances(); err != nil {
+		return nil, fmt.Errorf("recalculate balances: %w", err)
+	}
 
 	today := time.Now().Format("2006-01-02")
 	rows, err := s.db.Query("SELECT type, balance FROM accounts")
@@ -605,7 +611,9 @@ func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
 	for rows.Next() {
 		var typ string
 		var bal int64
-		rows.Scan(&typ, &bal)
+		if err := rows.Scan(&typ, &bal); err != nil {
+			continue
+		}
 		if model.IsLiability(model.AccountType(typ)) {
 			liabilities += bal
 		} else {
@@ -619,8 +627,10 @@ func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
 		equityValue, _ = GetEquityValue()
 	}
 	nw := assets - liabilities
-	s.db.Exec(`INSERT OR REPLACE INTO networth_snapshots (date, total_assets, total_liabilities, equity_value, net_worth) VALUES (?, ?, ?, ?, ?)`,
-		today, assets, liabilities, equityValue, nw)
+	if _, err := s.db.Exec(`INSERT OR REPLACE INTO networth_snapshots (date, total_assets, total_liabilities, equity_value, net_worth) VALUES (?, ?, ?, ?, ?)`,
+		today, assets, liabilities, equityValue, nw); err != nil {
+		return nil, fmt.Errorf("save snapshot: %w", err)
+	}
 	// Snapshot each account's balance for sparkline history
 	s.snapshotAccountBalances(today)
 
@@ -628,10 +638,15 @@ func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
 }
 
 func (s *Service) snapshotAccountBalances(date string) {
-	accs, _ := s.ListAccounts()
+	accs, err := s.ListAccounts()
+	if err != nil {
+		return
+	}
 	for _, a := range accs {
-		s.db.Exec(`INSERT OR REPLACE INTO account_balance_history (account_id, date, balance) VALUES (?, ?, ?)`,
-			a.ID, date, a.Balance)
+		if _, err := s.db.Exec(`INSERT OR REPLACE INTO account_balance_history (account_id, date, balance) VALUES (?, ?, ?)`,
+			a.ID, date, a.Balance); err != nil {
+			continue
+		}
 	}
 }
 
@@ -646,7 +661,9 @@ func (s *Service) GetAccountBalanceHistory(accountID int64, days int) ([]int64, 
 	var balances []int64
 	for rows.Next() {
 		var b int64
-		rows.Scan(&b)
+		if err := rows.Scan(&b); err != nil {
+			continue
+		}
 		balances = append(balances, b)
 	}
 	// Reverse to chronological order
@@ -665,7 +682,9 @@ func (s *Service) GetNetWorthHistory(limit int) ([]model.NetWorthSnapshot, error
 	var snaps []model.NetWorthSnapshot
 	for rows.Next() {
 		var n model.NetWorthSnapshot
-		rows.Scan(&n.ID, &n.Date, &n.TotalAssets, &n.TotalLiabilities, &n.EquityValue, &n.NetWorth)
+		if err := rows.Scan(&n.ID, &n.Date, &n.TotalAssets, &n.TotalLiabilities, &n.EquityValue, &n.NetWorth); err != nil {
+			continue
+		}
 		snaps = append(snaps, n)
 	}
 	return snaps, nil
@@ -696,7 +715,9 @@ func (s *Service) SpendingReport(year, month int) ([]SpendingByCategory, error) 
 	var total int64
 	for rows.Next() {
 		var r SpendingByCategory
-		rows.Scan(&r.CategoryName, &r.Amount)
+		if err := rows.Scan(&r.CategoryName, &r.Amount); err != nil {
+			continue
+		}
 		total += r.Amount
 		results = append(results, r)
 	}
@@ -709,8 +730,8 @@ func (s *Service) SpendingReport(year, month int) ([]SpendingByCategory, error) 
 }
 
 type IncomeBySource struct {
-	CategoryName string `json:"category"`
-	Amount       int64  `json:"amount"`
+	CategoryName string  `json:"category"`
+	Amount       int64   `json:"amount"`
 	Percent      float64 `json:"percent"`
 }
 
@@ -748,7 +769,9 @@ func (s *Service) IncomeReport(from, to, groupBy string) ([]IncomePeriod, error)
 	for rows.Next() {
 		var period, cat string
 		var amount int64
-		rows.Scan(&period, &cat, &amount)
+		if err := rows.Scan(&period, &cat, &amount); err != nil {
+			continue
+		}
 		if _, ok := periodMap[period]; !ok {
 			periodMap[period] = &IncomePeriod{Period: period}
 			periodOrder = append(periodOrder, period)
@@ -758,7 +781,7 @@ func (s *Service) IncomeReport(from, to, groupBy string) ([]IncomePeriod, error)
 		p.Sources = append(p.Sources, IncomeBySource{CategoryName: cat, Amount: amount})
 	}
 
-	var results []IncomePeriod
+	results := make([]IncomePeriod, 0, len(periodOrder))
 	for _, key := range periodOrder {
 		p := periodMap[key]
 		for i := range p.Sources {
@@ -793,7 +816,9 @@ func (s *Service) CashFlowReport(from, to string) ([]CashFlowReport, error) {
 	for rows.Next() {
 		var month, typ string
 		var amount int64
-		rows.Scan(&month, &typ, &amount)
+		if err := rows.Scan(&month, &typ, &amount); err != nil {
+			continue
+		}
 		if _, ok := m[month]; !ok {
 			m[month] = &CashFlowReport{Month: month}
 		}
@@ -804,7 +829,7 @@ func (s *Service) CashFlowReport(from, to string) ([]CashFlowReport, error) {
 			m[month].Expenses += amount
 		}
 	}
-	var results []CashFlowReport
+	results := make([]CashFlowReport, 0, len(m))
 	for _, v := range m {
 		v.Net = v.Income - v.Expenses
 		results = append(results, *v)

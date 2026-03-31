@@ -74,7 +74,7 @@ var equityBuyCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(lot)
 		}
 		fmt.Printf("Bought %.4f shares of %s at $%.2f (lot #%d, cost basis: $%.2f)\n",
@@ -130,7 +130,7 @@ var equityLotsCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(lots)
 		}
 
@@ -148,7 +148,7 @@ var equityLotsCmd = &cobra.Command{
 			}
 			accName := l.AccountName
 			if accName == "" {
-				accName = "—"
+				accName = emDash
 			}
 			fmt.Fprintf(w, "%d\t%s\t%.4f\t$%.2f\t%s\t%s\t%s\t$%.2f\t%+.2f (%.1f%%)\t%s\n",
 				l.ID, l.Ticker, l.Shares, float64(l.CostBasis)/100,
@@ -179,7 +179,9 @@ var equityPortfolioCmd = &cobra.Command{
 
 		// refresh prices first
 		tickers, _ := portfolioSvc.GetDistinctTickers()
-		pricesSvc.FetchPrices(tickers)
+		if _, err := pricesSvc.FetchPrices(tickers); err != nil {
+			return fmt.Errorf("fetching prices: %w", err)
+		}
 
 		portfolio, err := portfolioSvc.GetPortfolio(accountID)
 		if err != nil {
@@ -187,7 +189,7 @@ var equityPortfolioCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(portfolio)
 		}
 
@@ -247,7 +249,7 @@ var equityPriceCmd = &cobra.Command{
 			results = append(results, priceResult{t, float64(price) / 100})
 		}
 
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(results)
 		}
 		for _, r := range results {
@@ -324,7 +326,7 @@ var equityGrantAddCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(created)
 		}
 		fmt.Printf("Created %s grant #%d: %.0f shares of %s (cliff: %dm, vest: %dm, interval: %s)\n",
@@ -344,7 +346,7 @@ var equityGrantListCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(grants)
 		}
 
@@ -356,17 +358,17 @@ var equityGrantListCmd = &cobra.Command{
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "ID\tTICKER\tTYPE\tTOTAL\tVESTED\tUNVESTED\tSTRIKE\tFMV\tVEST START\tNEXT VEST")
 		for _, g := range grants {
-			strikeStr := "—"
+			strikeStr := emDash
 			if g.StrikePrice != nil {
 				strikeStr = fmt.Sprintf("$%.2f", float64(*g.StrikePrice)/100)
 			}
-			fmvStr := "—"
+			fmvStr := emDash
 			if g.FMVAtGrant != nil {
 				fmvStr = fmt.Sprintf("$%.2f", float64(*g.FMVAtGrant)/100)
 			}
 			vestStart := g.VestingStartDate
 			if vestStart == "" || vestStart == g.GrantDate {
-				vestStart = "—"
+				vestStart = emDash
 			}
 			fmt.Fprintf(w, "%d\t%s\t%s\t%.0f\t%.0f\t%.0f\t%s\t%s\t%s\t%s\n",
 				g.ID, g.Ticker, strings.ToUpper(g.GrantType), g.TotalShares,
@@ -447,7 +449,7 @@ var equityVestScheduleCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(events)
 		}
 
@@ -459,7 +461,7 @@ var equityVestScheduleCmd = &cobra.Command{
 		var cumulative float64
 		for _, e := range events {
 			cumulative += e.Shares
-			fmvStr := "—"
+			fmvStr := emDash
 			if e.FMVPerShare != nil {
 				fmvStr = fmt.Sprintf("$%.2f", float64(*e.FMVPerShare)/100)
 			}
@@ -495,7 +497,7 @@ var equityExerciseCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(lot)
 		}
 		fmt.Printf("Exercised ISO vest event #%d → lot #%d (%.4f shares of %s, cost basis: $%.2f)\n",
@@ -554,7 +556,7 @@ var equityImportCmd = &cobra.Command{
 		}
 
 		format, _ := cmd.Flags().GetString("format")
-		if format == "json" {
+		if format == formatJSON {
 			return json.NewEncoder(os.Stdout).Encode(result)
 		}
 
