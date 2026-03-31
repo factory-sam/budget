@@ -106,9 +106,25 @@ func (s *Service) UpdateAccountBalance(id int64, delta int64) error {
 }
 
 func (s *Service) RecalculateAccountBalance(id int64) error {
-	// income adds to balance; expense and transfer subtract
+	acc, err := s.GetAccount(id)
+	if err != nil {
+		return err
+	}
+
+	// For managed/brokerage accounts, the balance IS the portfolio value.
+	// Transactions (dividends) were inserted without balance effect.
+	if (acc.Type == model.AccountManaged || acc.Type == model.AccountBrokerage) && GetAccountEquityValue != nil {
+		eqVal, err := GetAccountEquityValue(id)
+		if err != nil {
+			return err
+		}
+		_, err = s.db.Exec("UPDATE accounts SET balance = ?, updated_at = ? WHERE id = ?", eqVal, time.Now(), id)
+		return err
+	}
+
+	// For cash-like accounts, sum all transactions
 	var balance int64
-	err := s.db.QueryRow(`
+	err = s.db.QueryRow(`
 		SELECT COALESCE(
 			SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END),
 			0)
@@ -570,10 +586,15 @@ func (s *Service) AutoCategorize(payee string) *int64 {
 // --- Net Worth ---
 
 type EquityValueFunc func() (int64, error)
+type AccountEquityValueFunc func(accountID int64) (int64, error)
 
 var GetEquityValue EquityValueFunc
+var GetAccountEquityValue AccountEquityValueFunc
 
 func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
+	// Refresh investment account balances from portfolio values
+	s.RecalculateAllBalances()
+
 	today := time.Now().Format("2006-01-02")
 	rows, err := s.db.Query("SELECT type, balance FROM accounts")
 	if err != nil {
@@ -591,11 +612,12 @@ func (s *Service) SnapshotNetWorth() (*model.NetWorthSnapshot, error) {
 			assets += bal
 		}
 	}
+	// Get equity value for display breakdown (already included in
+	// managed/brokerage account balances via RecalculateAccountBalance)
 	var equityValue int64
 	if GetEquityValue != nil {
 		equityValue, _ = GetEquityValue()
 	}
-	assets += equityValue
 	nw := assets - liabilities
 	s.db.Exec(`INSERT OR REPLACE INTO networth_snapshots (date, total_assets, total_liabilities, equity_value, net_worth) VALUES (?, ?, ?, ?, ?)`,
 		today, assets, liabilities, equityValue, nw)

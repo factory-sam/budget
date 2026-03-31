@@ -188,6 +188,28 @@ func (p *PortfolioService) EquityValueForNetWorth() (int64, error) {
 	return total, nil
 }
 
+// EquityValueForAccount returns market value of lots in a specific account
+func (p *PortfolioService) EquityValueForAccount(accountID int64) (int64, error) {
+	rows, err := p.db.Query("SELECT ticker, shares FROM equity_lots WHERE include_in_networth = 1 AND account_id = ?", accountID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var total int64
+	for rows.Next() {
+		var ticker string
+		var shares float64
+		rows.Scan(&ticker, &shares)
+		price, err := p.prices.GetCachedPrice(ticker)
+		if err != nil {
+			continue
+		}
+		total += int64(math.Round(float64(price) * shares))
+	}
+	return total, nil
+}
+
 // GetDistinctTickers returns all unique tickers in the portfolio
 func (p *PortfolioService) GetDistinctTickers() ([]string, error) {
 	rows, err := p.db.Query("SELECT DISTINCT ticker FROM equity_lots ORDER BY ticker")

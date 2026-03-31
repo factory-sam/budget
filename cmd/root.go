@@ -38,6 +38,7 @@ var rootCmd = &cobra.Command{
 		ps := equity.NewPriceService(database)
 		ps2 := equity.NewPortfolioService(database, ps)
 		svc.GetEquityValue = ps2.EquityValueForNetWorth
+		svc.GetAccountEquityValue = ps2.EquityValueForAccount
 		return nil
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
