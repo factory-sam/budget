@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sam/budget/internal/analytics"
 	"github.com/sam/budget/internal/db"
 	"github.com/sam/budget/internal/equity"
 	svc "github.com/sam/budget/internal/service"
@@ -46,10 +47,16 @@ var rootCmd = &cobra.Command{
 		svc.GetAccountEquityValue = ps2.EquityValueForAccount
 		return nil
 	},
-	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+		// Track command usage
+		cmdPath := cmd.CommandPath()
+		analytics.Track("command_executed", map[string]interface{}{
+			"command": cmdPath,
+		})
 		if database != nil {
 			database.Close()
 		}
+		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runTUI(cmd, args)
@@ -57,6 +64,9 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
+	analytics.Init()
+	defer analytics.Close()
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

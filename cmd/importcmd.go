@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sam/budget/internal/analytics"
 	"github.com/sam/budget/internal/importer"
 	"github.com/spf13/cobra"
 )
@@ -43,6 +44,10 @@ var importCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		analytics.Track("transactions_imported", map[string]interface{}{
+			"format": ext,
+			"count":  count,
+		})
 		fmt.Printf("Imported %d transactions into %s\n", count, acc.Name)
 		return nil
 	},

@@ -21,10 +21,23 @@ type ReportsModel struct {
 	nwHistory     []model.NetWorthSnapshot
 	incomeGroup   string // monthly, quarterly, yearly
 	activeReport  int    // 0=spending, 1=cashflow, 2=income, 3=net worth
+	// date navigation
+	spendYear  int
+	spendMonth int
+	cfMonths   int // how many months of cash flow to show
+	nwDays     int // net worth history days
 }
 
 func NewReportsModel(svc *service.Service) ReportsModel {
-	return ReportsModel{svc: svc, incomeGroup: "monthly"}
+	now := time.Now()
+	return ReportsModel{
+		svc:         svc,
+		incomeGroup: "monthly",
+		spendYear:   now.Year(),
+		spendMonth:  int(now.Month()),
+		cfMonths:    6,
+		nwDays:      365,
+	}
 }
 
 type reportsDataMsg struct {
@@ -36,15 +49,18 @@ type reportsDataMsg struct {
 
 func (r ReportsModel) Init() tea.Cmd {
 	group := r.incomeGroup
+	spY, spM := r.spendYear, r.spendMonth
+	cfMonths := r.cfMonths
+	nwDays := r.nwDays
 	return func() tea.Msg {
 		now := time.Now()
-		sp, _ := r.svc.SpendingReport(now.Year(), int(now.Month()))
-		from := now.AddDate(0, -6, 0).Format("2006-01-02")
-		to := now.Format("2006-01-02")
-		cf, _ := r.svc.CashFlowReport(from, to)
+		sp, _ := r.svc.SpendingReport(spY, spM)
+		cfFrom := now.AddDate(0, -cfMonths, 0).Format("2006-01-02")
+		cfTo := now.Format("2006-01-02")
+		cf, _ := r.svc.CashFlowReport(cfFrom, cfTo)
 		incFrom := now.AddDate(-1, 0, 0).Format("2006-01-02")
-		inc, _ := r.svc.IncomeReport(incFrom, to, group)
-		nwh, _ := r.svc.GetNetWorthHistory(365)
+		inc, _ := r.svc.IncomeReport(incFrom, cfTo, group)
+		nwh, _ := r.svc.GetNetWorthHistory(nwDays)
 		return reportsDataMsg{sp, cf, inc, nwh}
 	}
 }
@@ -66,8 +82,53 @@ func (r ReportsModel) Update(msg tea.Msg) (ReportsModel, tea.Cmd) {
 			if r.activeReport < 3 {
 				r.activeReport++
 			}
+		case "[":
+			switch r.activeReport {
+			case 0: // spending — previous month
+				r.spendMonth--
+				if r.spendMonth < 1 {
+					r.spendMonth = 12
+					r.spendYear--
+				}
+			case 1: // cash flow — show more months
+				r.cfMonths += 3
+				if r.cfMonths > 24 {
+					r.cfMonths = 24
+				}
+			case 3: // net worth — show more history
+				r.nwDays += 90
+				if r.nwDays > 1095 {
+					r.nwDays = 1095
+				}
+			}
+			return r, r.Init()
+		case "]":
+			now := time.Now()
+			switch r.activeReport {
+			case 0: // spending — next month
+				r.spendMonth++
+				if r.spendMonth > 12 {
+					r.spendMonth = 1
+					r.spendYear++
+				}
+				// Don't go past current month
+				if r.spendYear > now.Year() || (r.spendYear == now.Year() && r.spendMonth > int(now.Month())) {
+					r.spendYear = now.Year()
+					r.spendMonth = int(now.Month())
+				}
+			case 1: // cash flow — show fewer months
+				r.cfMonths -= 3
+				if r.cfMonths < 3 {
+					r.cfMonths = 3
+				}
+			case 3: // net worth — show less history
+				r.nwDays -= 90
+				if r.nwDays < 30 {
+					r.nwDays = 30
+				}
+			}
+			return r, r.Init()
 		case "g":
-			// cycle income grouping when on income tab
 			if r.activeReport == 2 {
 				switch r.incomeGroup {
 				case "monthly":
@@ -114,21 +175,22 @@ func (r ReportsModel) View() string {
 		sb.WriteString(r.viewNetWorthHistory())
 	}
 
-	help := "h/l:switch reports"
+	help := "h/l:switch reports  [/]:navigate period"
 	if r.activeReport == 2 {
 		help += "  g:cycle grouping (" + r.incomeGroup + ")"
 	}
-	sb.WriteString("\n  " + help)
+	sb.WriteString("\n  " + lipgloss.NewStyle().Foreground(muted).Render(help))
 	return sb.String()
 }
 
 func (r ReportsModel) viewSpending() string {
-	now := time.Now()
+	monthName := time.Month(r.spendMonth).String()
 	var sb strings.Builder
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("Spending by Category — %s %d", now.Month().String(), now.Year())) + "\n\n")
+	sb.WriteString(headerStyle.Render(fmt.Sprintf("Spending by Category — %s %d", monthName, r.spendYear)) + "\n\n")
 
 	if len(r.spending) == 0 {
-		sb.WriteString("  No spending data.\n")
+		sb.WriteString("  No spending data for this month.\n")
+		sb.WriteString("  Use " + lipgloss.NewStyle().Bold(true).Render("[/]") + " to navigate to other months.\n")
 		return sb.String()
 	}
 
@@ -140,7 +202,7 @@ func (r ReportsModel) viewSpending() string {
 		barWidth = 50
 	}
 
-	for _, sp := range r.spending {
+	for i, sp := range r.spending {
 		filled := int(sp.Percent / 100 * float64(barWidth))
 		if filled < 1 && sp.Amount > 0 {
 			filled = 1
@@ -148,8 +210,12 @@ func (r ReportsModel) viewSpending() string {
 		empty := barWidth - filled
 		bar := lipgloss.NewStyle().Foreground(highlight).Render(strings.Repeat("█", filled)) + strings.Repeat("░", empty)
 
-		sb.WriteString(fmt.Sprintf("  %-18s  %10s  %5.1f%%  %s\n",
-			truncStr(sp.CategoryName, 18), fmtMoney(sp.Amount), sp.Percent, bar))
+		line := fmt.Sprintf("  %-18s  %10s  %5.1f%%  %s",
+			truncStr(sp.CategoryName, 18), fmtMoney(sp.Amount), sp.Percent, bar)
+		if i%2 == 1 {
+			line = altRowStyle.Render(line)
+		}
+		sb.WriteString(line + "\n")
 	}
 
 	var total int64
@@ -169,7 +235,6 @@ func (r ReportsModel) viewIncome() string {
 		return sb.String()
 	}
 
-	// Grand total
 	var grandTotal int64
 	for _, p := range r.income {
 		grandTotal += p.Total
@@ -185,7 +250,6 @@ func (r ReportsModel) viewIncome() string {
 		barWidth = 35
 	}
 
-	// Find max source for scaling
 	var maxAmt int64
 	for _, p := range r.income {
 		for _, s := range p.Sources {
@@ -223,14 +287,13 @@ func (r ReportsModel) viewIncome() string {
 
 func (r ReportsModel) viewCashFlow() string {
 	var sb strings.Builder
-	sb.WriteString(headerStyle.Render("Cash Flow — Last 6 Months") + "\n\n")
+	sb.WriteString(headerStyle.Render(fmt.Sprintf("Cash Flow — Last %d Months", r.cfMonths)) + "\n\n")
 
 	if len(r.cashflow) == 0 {
 		sb.WriteString("  No data yet.\n")
 		return sb.String()
 	}
 
-	// Find max for scaling bars
 	var maxVal int64
 	for _, cf := range r.cashflow {
 		if cf.Income > maxVal {
@@ -249,7 +312,6 @@ func (r ReportsModel) viewCashFlow() string {
 		barWidth = 40
 	}
 
-	// Totals
 	var totalInc, totalExp int64
 	for _, cf := range r.cashflow {
 		totalInc += cf.Income
@@ -266,7 +328,6 @@ func (r ReportsModel) viewCashFlow() string {
 		totNetStyle.Render(fmtMoney(totalNet))))
 
 	for _, cf := range r.cashflow {
-		// Month header with net
 		netStyle := greenStyle
 		if cf.Net < 0 {
 			netStyle = redStyle
@@ -275,7 +336,6 @@ func (r ReportsModel) viewCashFlow() string {
 			lipgloss.NewStyle().Bold(true).Render(cf.Month),
 			netStyle.Render(fmtMoneySign(cf.Net))))
 
-		// Income bar
 		incBar := 0
 		if maxVal > 0 {
 			incBar = int(float64(cf.Income) / float64(maxVal) * float64(barWidth))
@@ -288,7 +348,6 @@ func (r ReportsModel) viewCashFlow() string {
 			greenStyle.Render(strings.Repeat("█", incBar)+strings.Repeat("░", barWidth-incBar)),
 			greenStyle.Render(fmtMoney(cf.Income))))
 
-		// Expense bar
 		expBar := 0
 		if maxVal > 0 {
 			expBar = int(float64(cf.Expenses) / float64(maxVal) * float64(barWidth))
@@ -308,7 +367,14 @@ func (r ReportsModel) viewCashFlow() string {
 
 func (r ReportsModel) viewNetWorthHistory() string {
 	var sb strings.Builder
-	sb.WriteString(headerStyle.Render("Net Worth Over Time") + "\n\n")
+
+	period := "Year"
+	if r.nwDays > 365 {
+		period = fmt.Sprintf("%d Years", r.nwDays/365)
+	} else if r.nwDays < 365 {
+		period = fmt.Sprintf("%d Days", r.nwDays)
+	}
+	sb.WriteString(headerStyle.Render(fmt.Sprintf("Net Worth Over Time — %s", period)) + "\n\n")
 
 	if len(r.nwHistory) < 2 {
 		sb.WriteString("  Not enough data yet. Net worth history builds as you use the app.\n")
@@ -346,8 +412,7 @@ func (r ReportsModel) viewNetWorthHistory() string {
 	tslc.DrawBraille()
 	sb.WriteString("  " + tslc.View() + "\n\n")
 
-	// nwHistory is in desc order (newest first), so first entry is latest
-	first := r.nwHistory[len(r.nwHistory)-1] // oldest
+	first := r.nwHistory[len(r.nwHistory)-1]
 	change := latest.NetWorth - first.NetWorth
 	changeStyle := greenStyle
 	if change < 0 {

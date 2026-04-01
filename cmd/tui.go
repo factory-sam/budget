@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/sam/budget/internal/analytics"
 	"github.com/sam/budget/tui"
 	"github.com/spf13/cobra"
 )
@@ -15,6 +16,7 @@ var tuiCmd = &cobra.Command{
 }
 
 func runTUI(cmd *cobra.Command, args []string) error {
+	analytics.Track("tui_launched", nil)
 	app := tui.NewApp(service)
 	p := tea.NewProgram(app, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

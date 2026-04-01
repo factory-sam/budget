@@ -90,3 +90,8 @@ issues:
         - funlen
         - cyclop
         - gocyclo
+        - dupl
+    - path: internal/importer/
+      linters:
+        - gocyclo
+        - cyclop

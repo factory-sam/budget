@@ -86,7 +86,7 @@ func (d *DashboardModel) SetSize(w, h int) {
 
 func (d DashboardModel) View() string {
 	if d.netWorth == nil {
-		return "Loading dashboard..."
+		return lipgloss.NewStyle().Foreground(highlight).Render("  Loading dashboard...")
 	}
 
 	colWidth := d.width/2 - 4
@@ -316,7 +316,7 @@ func (d DashboardModel) renderTopSpending(w int) string {
 func (d DashboardModel) renderRecentTxs() string {
 	s := headerStyle.Render("Recent Transactions")
 	if len(d.recentTxs) == 0 {
-		return s + "\n  No transactions yet"
+		return boxStyle.Width(d.width - 4).Render(s + "\n  No transactions yet. Use '2' to go to Transactions and add some.")
 	}
 	s += "\n"
 	for _, t := range d.recentTxs {
@@ -336,12 +336,5 @@ func (d DashboardModel) renderRecentTxs() string {
 			style.Render(fmt.Sprintf("%s%s", sign, fmtMoney(t.Amount))),
 			lipgloss.NewStyle().Foreground(muted).Render(t.CategoryName))
 	}
-	return s
-}
-
-func truncStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-1] + "…"
+	return boxStyle.Width(d.width - 4).Render(s)
 }
