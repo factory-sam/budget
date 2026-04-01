@@ -21,13 +21,42 @@ jobs:
         with:
           version: v1.64
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
       - name: Test
-        run: go test -v -race -count=1 -coverprofile=coverage.out ./...
+        run: |
+          gotestsum \
+            --format testdox \
+            --junitfile test-results.xml \
+            --jsonfile test-results.json \
+            -- -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test-results.xml
+            test-results.json
+          retention-days: 30
+
+      - name: Test report summary
+        if: always()
+        run: |
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          gotestsum --raw-command -- cat test-results.json \
+            --format testdox 2>&1 | head -100 >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Full results in test-results.xml artifact." >> $GITHUB_STEP_SUMMARY
 
       - name: Check coverage
         run: |
           total=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
           echo "Total coverage: ${total}%"
+          echo "## Coverage: ${total}%" >> $GITHUB_STEP_SUMMARY
           threshold=30
           if [ "$(echo "$total < $threshold" | bc -l)" -eq 1 ]; then
             echo "::error::Coverage ${total}% is below threshold ${threshold}%"
