@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sam/budget/internal/equity"
@@ -40,6 +41,8 @@ type App struct {
 
 	modal     tea.Model
 	showModal bool
+	showHelp  bool
+	spinner   spinner.Model
 }
 
 func NewApp(svc *service.Service) *App {
@@ -47,6 +50,10 @@ func NewApp(svc *service.Service) *App {
 	ps := equity.NewPriceService(db)
 	portSvc := equity.NewPortfolioService(db, ps)
 	grantSvc := equity.NewGrantService(db, ps, portSvc)
+
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = spinnerStyle
 
 	return &App{
 		svc:          svc,
@@ -57,6 +64,7 @@ func NewApp(svc *service.Service) *App {
 		recurring:    NewRecurringModel(svc),
 		reports:      NewReportsModel(svc),
 		portfolio:    NewPortfolioModel(ps, portSvc, grantSvc, svc),
+		spinner:      sp,
 	}
 }
 
@@ -69,6 +77,7 @@ func (a *App) Init() tea.Cmd {
 		a.budgets.Init(),
 		a.accounts.Init(),
 		a.recurring.Init(),
+		a.spinner.Tick,
 	)
 }
 
@@ -90,7 +99,17 @@ func (a *App) childInputActive() bool {
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		a.spinner, cmd = a.spinner.Update(msg)
+		return a, cmd
+
 	case tea.KeyMsg:
+		if a.showHelp {
+			a.showHelp = false
+			return a, nil
+		}
+
 		if a.showModal {
 			var cmd tea.Cmd
 			a.modal, cmd = a.modal.Update(msg)
@@ -102,7 +121,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// When a child view has an active text input, send keys there directly.
-		// Only ctrl+c still quits.
 		if a.childInputActive() {
 			if msg.String() == "ctrl+c" {
 				return a, tea.Quit
@@ -126,6 +144,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return a, tea.Quit
+		case "?":
+			a.showHelp = !a.showHelp
+			return a, nil
 		case "1":
 			a.activeTab = TabDashboard
 			return a, a.dashboard.Init()
@@ -147,12 +168,29 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "7":
 			a.activeTab = TabPortfolio
 			return a, a.portfolio.Init()
-		case "tab":
+		case keyTab:
 			a.activeTab = (a.activeTab + 1) % Tab(len(tabNames))
 			return a, a.initActiveTab()
-		case "shift+tab":
+		case keyShiftTab:
 			a.activeTab = (a.activeTab - 1 + Tab(len(tabNames))) % Tab(len(tabNames))
 			return a, a.initActiveTab()
+		}
+
+	case tea.MouseMsg:
+		// Mouse support for tab bar clicks
+		if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
+			if msg.Y <= 1 {
+				x := 0
+				for i, name := range tabNames {
+					label := fmt.Sprintf("%d:%s", i+1, name)
+					tabW := len(label) + 4 // padding
+					if msg.X >= x && msg.X < x+tabW {
+						a.activeTab = Tab(i)
+						return a, a.initActiveTab()
+					}
+					x += tabW
+				}
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -212,7 +250,12 @@ func (a *App) initActiveTab() tea.Cmd {
 
 func (a *App) View() string {
 	if a.width == 0 {
-		return "Loading..."
+		return a.spinner.View() + " Loading..."
+	}
+
+	// Help overlay
+	if a.showHelp {
+		return a.viewHelp()
 	}
 
 	// Tab bar
@@ -246,15 +289,14 @@ func (a *App) View() string {
 		content = a.portfolio.View()
 	}
 
-	// Status bar — context-aware per tab
+	// Status bar
 	help := statusBarStyle.Render(a.helpText())
 
 	// Compose
 	header := titleStyle.Render("budget") + "  " + tabBar
 	view := lipgloss.JoinVertical(lipgloss.Left, header, "", content)
 
-	// Pad content to fill screen
-	contentHeight := a.height - 3 // header + help + gap
+	contentHeight := a.height - 3
 	lines := strings.Count(view, "\n") + 1
 	if lines < contentHeight {
 		view += strings.Repeat("\n", contentHeight-lines)
@@ -264,8 +306,82 @@ func (a *App) View() string {
 	return view
 }
 
+func (a *App) viewHelp() string {
+	helpBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlight).
+		Padding(1, 3).
+		Width(60)
+
+	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Keyboard Shortcuts")
+
+	sections := []struct {
+		header string
+		keys   [][2]string
+	}{
+		{"Global", [][2]string{
+			{"1-7", "Switch to tab"},
+			{"tab / shift+tab", "Next / previous tab"},
+			{"?", "Toggle this help"},
+			{"q / ctrl+c", "Quit"},
+		}},
+		{"Lists", [][2]string{
+			{"j / k", "Navigate down / up"},
+			{"g / G", "Jump to top / bottom"},
+		}},
+		{"Transactions", [][2]string{
+			{"a", "Add transaction"},
+			{"e", "Edit transaction"},
+			{"c", "Categorize"},
+			{"t", "Cycle type"},
+			{"d", "Delete"},
+			{"/", "Search"},
+			{"u", "Toggle uncategorized"},
+		}},
+		{"Budgets", [][2]string{
+			{"a", "Set new budget"},
+			{"e / enter", "Edit budget"},
+			{"[ / ]", "Previous / next month"},
+		}},
+		{"Reports", [][2]string{
+			{"h / l", "Switch reports"},
+			{"[ / ]", "Previous / next period"},
+			{"g", "Cycle income grouping"},
+		}},
+		{"Portfolio", [][2]string{
+			{"a", "Buy stock / add grant"},
+			{"d", "Delete"},
+			{"l", "Toggle lots"},
+			{"f", "Filter by account"},
+			{"r", "Refresh prices"},
+			{"p / g / s", "Positions / grants / schedule"},
+		}},
+		{"Forms", [][2]string{
+			{"tab / shift+tab", "Next / previous field"},
+			{"enter", "Submit (on last field)"},
+			{"ctrl+n / ctrl+p", "Navigate suggestions"},
+			{"esc", "Cancel"},
+		}},
+	}
+
+	var sb strings.Builder
+	sb.WriteString(title + "\n\n")
+	for _, sec := range sections {
+		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(special).Render(sec.header) + "\n")
+		for _, kv := range sec.keys {
+			key := lipgloss.NewStyle().Width(22).Foreground(highlight).Render(kv[0])
+			sb.WriteString("  " + key + kv[1] + "\n")
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(lipgloss.NewStyle().Foreground(muted).Render("Press any key to close"))
+
+	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center,
+		helpBox.Render(sb.String()))
+}
+
 func (a *App) helpText() string {
-	common := "1-7:tabs  tab/shift+tab:switch  q:quit"
+	common := "1-7:tabs  tab/shift+tab:switch  ?:help  q:quit"
 	switch a.activeTab {
 	case TabDashboard:
 		return common
@@ -276,12 +392,12 @@ func (a *App) helpText() string {
 		if a.transactions.InputActive() {
 			return helpFormNav
 		}
-		return "j/k:navigate  a:add  c:categorize  t:type  u:uncategorized  /:search  d:delete  " + common
+		return "j/k:navigate  a:add  e:edit  c:categorize  t:type  u:uncategorized  /:search  d:delete  " + common
 	case TabBudgets:
 		if a.budgets.InputActive() {
 			return helpFormNav
 		}
-		return "j/k:navigate  e/enter:edit  a:set budget  g/G:top/bottom  " + common
+		return "j/k:navigate  e/enter:edit  a:set budget  [/]:month  g/G:top/bottom  " + common
 	case TabAccounts:
 		if a.accounts.confirmDelete {
 			return helpConfirmDelete
@@ -299,7 +415,7 @@ func (a *App) helpText() string {
 		}
 		return "j/k:navigate  a:add  g/G:top/bottom  d:delete  " + common
 	case TabReports:
-		return "h/l:switch reports  " + common
+		return "h/l:switch reports  [/]:period  " + common
 	case TabPortfolio:
 		if a.portfolio.confirmDelete {
 			return helpConfirmDelete

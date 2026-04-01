@@ -357,6 +357,13 @@ func (s *Service) DeleteTransaction(id int64) error {
 	return s.UpdateAccountBalance(accountID, delta)
 }
 
+func (s *Service) UpdateTransaction(txID, accountID int64, categoryID *int64, amount int64, date, payee, note string, txType model.TxType) error {
+	_, err := s.db.Exec(
+		`UPDATE transactions SET account_id=?, category_id=?, amount=?, date=?, payee=?, note=?, type=? WHERE id=?`,
+		accountID, categoryID, amount, date, payee, note, txType, txID)
+	return err
+}
+
 func (s *Service) UpdateTransactionCategory(txID int64, categoryID *int64) error {
 	_, err := s.db.Exec("UPDATE transactions SET category_id = ? WHERE id = ?", categoryID, txID)
 	return err

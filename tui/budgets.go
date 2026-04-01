@@ -19,12 +19,15 @@ type BudgetsModel struct {
 	statuses      []model.BudgetStatus
 	cursor        int
 	form          FormModel
+	viewYear      int
+	viewMonth     int
 }
 
 func (b BudgetsModel) InputActive() bool { return b.form.Active() }
 
 func NewBudgetsModel(svc *service.Service) BudgetsModel {
-	return BudgetsModel{svc: svc}
+	now := time.Now()
+	return BudgetsModel{svc: svc, viewYear: now.Year(), viewMonth: int(now.Month())}
 }
 
 type budgetDataMsg struct {
@@ -32,9 +35,9 @@ type budgetDataMsg struct {
 }
 
 func (b BudgetsModel) Init() tea.Cmd {
+	year, month := b.viewYear, b.viewMonth
 	return func() tea.Msg {
-		now := time.Now()
-		statuses, _ := b.svc.GetBudgetStatus(now.Year(), int(now.Month()))
+		statuses, _ := b.svc.GetBudgetStatus(year, month)
 		return budgetDataMsg{statuses}
 	}
 }
@@ -66,6 +69,22 @@ func (b BudgetsModel) Update(msg tea.Msg) (BudgetsModel, tea.Cmd) {
 			if len(b.statuses) > 0 {
 				b.cursor = len(b.statuses) - 1
 			}
+		case "[":
+			b.viewMonth--
+			if b.viewMonth < 1 {
+				b.viewMonth = 12
+				b.viewYear--
+			}
+			b.cursor = 0
+			return b, b.Init()
+		case "]":
+			b.viewMonth++
+			if b.viewMonth > 12 {
+				b.viewMonth = 1
+				b.viewYear++
+			}
+			b.cursor = 0
+			return b, b.Init()
 		case "a":
 			b.form = b.newSetForm()
 		case "e", "enter":
@@ -79,6 +98,7 @@ func (b BudgetsModel) Update(msg tea.Msg) (BudgetsModel, tea.Cmd) {
 
 func (b *BudgetsModel) newSetForm() FormModel {
 	svc := b.svc
+	year, month := b.viewYear, b.viewMonth
 	return NewForm("Set Budget", []FormField{
 		{Label: "Category", Placeholder: "e.g. Groceries, Rent, Streaming"},
 		{Label: "Monthly Limit", Placeholder: "e.g. 600"},
@@ -100,12 +120,11 @@ func (b *BudgetsModel) newSetForm() FormModel {
 			return nil, "Invalid amount — enter a number like 600"
 		}
 		cents := int64(math.Round(amount * 100))
-		now := time.Now()
-		if err := svc.SetBudget(cat.ID, now.Year(), int(now.Month()), cents); err != nil {
+		if err := svc.SetBudget(cat.ID, year, month, cents); err != nil {
 			return nil, fmt.Sprintf("Error setting budget: %v", err)
 		}
 		return func() tea.Msg {
-			statuses, _ := svc.GetBudgetStatus(now.Year(), int(now.Month()))
+			statuses, _ := svc.GetBudgetStatus(year, month)
 			return budgetDataMsg{statuses}
 		}, ""
 	})
@@ -114,6 +133,7 @@ func (b *BudgetsModel) newSetForm() FormModel {
 func (b *BudgetsModel) newEditForm(status model.BudgetStatus) FormModel {
 	svc := b.svc
 	catID := status.CategoryID
+	year, month := b.viewYear, b.viewMonth
 	currentLimit := ""
 	if status.AmountLimit > 0 {
 		currentLimit = fmt.Sprintf("%.2f", float64(status.AmountLimit)/100)
@@ -130,12 +150,11 @@ func (b *BudgetsModel) newEditForm(status model.BudgetStatus) FormModel {
 			return nil, "Invalid amount — enter a number like 600"
 		}
 		cents := int64(math.Round(amount * 100))
-		now := time.Now()
-		if err := svc.SetBudget(catID, now.Year(), int(now.Month()), cents); err != nil {
+		if err := svc.SetBudget(catID, year, month, cents); err != nil {
 			return nil, fmt.Sprintf("Failed to set budget: %v", err)
 		}
 		return func() tea.Msg {
-			statuses, _ := svc.GetBudgetStatus(now.Year(), int(now.Month()))
+			statuses, _ := svc.GetBudgetStatus(year, month)
 			return budgetDataMsg{statuses}
 		}, ""
 	})
@@ -151,12 +170,22 @@ func (b BudgetsModel) View() string {
 		return b.form.View()
 	}
 
+	monthName := time.Month(b.viewMonth).String()
 	now := time.Now()
+	isCurrent := b.viewYear == now.Year() && b.viewMonth == int(now.Month())
+
 	var sb strings.Builder
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("Budgets — %s %d", now.Month().String(), now.Year())) + "\n\n")
+
+	titleStr := fmt.Sprintf("Budgets — %s %d", monthName, b.viewYear)
+	if !isCurrent {
+		titleStr += "  " + lipgloss.NewStyle().Foreground(muted).Render("[/]:navigate months")
+	}
+	sb.WriteString(headerStyle.Render(titleStr) + "\n\n")
 
 	if len(b.statuses) == 0 {
-		sb.WriteString("  No budgets set. Press 'a' to add one.\n")
+		sb.WriteString("  No budgets set for this month.\n")
+		sb.WriteString("  Press " + lipgloss.NewStyle().Bold(true).Render("a") + " to add one,")
+		sb.WriteString(" or " + lipgloss.NewStyle().Bold(true).Render("[/]") + " to navigate months.\n")
 		return sb.String()
 	}
 
@@ -203,6 +232,8 @@ func (b BudgetsModel) View() string {
 
 		if i == b.cursor {
 			line = selectedRowStyle.Render(line)
+		} else if i%2 == 1 {
+			line = altRowStyle.Render(line)
 		}
 		sb.WriteString(line + "\n")
 	}

@@ -31,6 +31,7 @@ type TransactionsModel struct {
 	// delete confirmation
 	confirmDelete bool
 	statusMsg     string
+	statusIsGood  bool // true for success messages
 }
 
 func (t TransactionsModel) InputActive() bool {
@@ -80,6 +81,46 @@ func (t *TransactionsModel) filterCategories() {
 	}
 }
 
+func (t *TransactionsModel) accountSuggestions(input string) []string {
+	accs, _ := t.svc.ListAccounts()
+	if input == "" {
+		names := make([]string, len(accs))
+		for i, a := range accs {
+			names[i] = a.Name
+		}
+		return names
+	}
+	lower := strings.ToLower(input)
+	var matches []string
+	for _, a := range accs {
+		if strings.Contains(strings.ToLower(a.Name), lower) {
+			matches = append(matches, a.Name)
+		}
+	}
+	return matches
+}
+
+func (t *TransactionsModel) categorySuggestions(input string) []string {
+	if len(t.catList) == 0 {
+		t.catList, _ = t.svc.ListCategories()
+	}
+	if input == "" {
+		names := make([]string, len(t.catList))
+		for i, c := range t.catList {
+			names[i] = c.Name
+		}
+		return names
+	}
+	lower := strings.ToLower(input)
+	var matches []string
+	for _, c := range t.catList {
+		if strings.Contains(strings.ToLower(c.Name), lower) {
+			matches = append(matches, c.Name)
+		}
+	}
+	return matches
+}
+
 func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 	if t.form.Active() {
 		var cmd tea.Cmd
@@ -93,10 +134,14 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 		if t.cursor >= len(t.txs) && len(t.txs) > 0 {
 			t.cursor = len(t.txs) - 1
 		}
-		// don't reset cursor on reload (preserve position for categorize/type toggle)
 
 	case tea.KeyMsg:
-		t.statusMsg = ""
+		// Clear status on any keypress
+		if t.statusMsg != "" && !t.catPicking && !t.confirmDelete && !t.searching {
+			t.statusMsg = ""
+			t.statusIsGood = false
+		}
+
 		if t.catPicking {
 			switch msg.String() {
 			case keyEsc:
@@ -111,6 +156,8 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 						return t, nil
 					}
 					t.catPicking = false
+					t.statusMsg = fmt.Sprintf("Categorized as %s", cat.Name)
+					t.statusIsGood = true
 					return t, t.Init()
 				}
 			case "j", keyDown:
@@ -140,10 +187,13 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 			case "y", "Y":
 				t.confirmDelete = false
 				if t.cursor < len(t.txs) {
+					payee := t.txs[t.cursor].Payee
 					if err := t.svc.DeleteTransaction(t.txs[t.cursor].ID); err != nil {
 						t.statusMsg = fmt.Sprintf("Error deleting transaction: %v", err)
 						return t, nil
 					}
+					t.statusMsg = fmt.Sprintf("Deleted %q", payee)
+					t.statusIsGood = true
 					return t, t.Init()
 				}
 			default:
@@ -195,6 +245,10 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 			t.search = ""
 		case "a":
 			t.form = t.newAddForm()
+		case "e":
+			if len(t.txs) > 0 && t.cursor < len(t.txs) {
+				t.form = t.newEditForm(t.txs[t.cursor])
+			}
 		case "u":
 			t.filter.Uncategorized = !t.filter.Uncategorized
 			t.cursor = 0
@@ -206,7 +260,6 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 		case "t":
 			if len(t.txs) > 0 && t.cursor < len(t.txs) {
 				tx := t.txs[t.cursor]
-				// Cycle: expense -> transfer_out -> transfer_in -> income -> expense
 				var newType model.TxType
 				switch tx.Type {
 				case model.TxExpense:
@@ -241,8 +294,8 @@ func (t *TransactionsModel) newAddForm() FormModel {
 	return NewForm("Add Transaction", []FormField{
 		{Label: "Amount", Placeholder: "0.00"},
 		{Label: "Payee", Placeholder: "e.g. Whole Foods"},
-		{Label: "Category", Placeholder: "e.g. Groceries"},
-		{Label: "Account", Placeholder: "e.g. Checking"},
+		{Label: "Category", Placeholder: "e.g. Groceries", SuggestFunc: t.categorySuggestions},
+		{Label: "Account", Placeholder: "e.g. Checking", SuggestFunc: t.accountSuggestions},
 		{Label: "Type", Value: "expense", Options: []string{"expense", "income", "transfer_out", "transfer_in"}},
 		{Label: "Date", Value: time.Now().Format("2006-01-02")},
 		{Label: "Note", Placeholder: "optional"},
@@ -256,10 +309,10 @@ func (t *TransactionsModel) newAddForm() FormModel {
 		note := strings.TrimSpace(fields[6].Value)
 
 		if amtStr == "" {
-			return nil, "Amount is required"
+			return nil, errAmountRequired
 		}
 		if accName == "" {
-			return nil, "Account is required"
+			return nil, errAccountRequired
 		}
 		amount, err := strconv.ParseFloat(amtStr, 64)
 		if err != nil || amount <= 0 {
@@ -308,6 +361,89 @@ func (t *TransactionsModel) newAddForm() FormModel {
 	})
 }
 
+func (t *TransactionsModel) newEditForm(tx model.Transaction) FormModel {
+	svc := t.svc
+	filter := t.filter
+	txID := tx.ID
+	oldAccountID := tx.AccountID
+	oldAmount := tx.Amount
+	oldType := tx.Type
+
+	return NewForm(fmt.Sprintf("Edit Transaction — %s", truncStr(tx.Payee, 30)), []FormField{
+		{Label: "Amount", Value: fmt.Sprintf("%.2f", float64(tx.Amount)/100)},
+		{Label: "Payee", Value: tx.Payee},
+		{Label: "Category", Value: tx.CategoryName, SuggestFunc: t.categorySuggestions},
+		{Label: "Account", Value: tx.AccountName, SuggestFunc: t.accountSuggestions},
+		{Label: "Type", Value: string(tx.Type), Options: []string{"expense", "income", "transfer_out", "transfer_in"}},
+		{Label: "Date", Value: tx.Date},
+		{Label: "Note", Value: tx.Note},
+	}, func(fields []FormField) (tea.Cmd, string) {
+		amtStr := strings.TrimSpace(fields[0].Value)
+		payee := strings.TrimSpace(fields[1].Value)
+		catName := strings.TrimSpace(fields[2].Value)
+		accName := strings.TrimSpace(fields[3].Value)
+		txType := fields[4].Value
+		date := strings.TrimSpace(fields[5].Value)
+		note := strings.TrimSpace(fields[6].Value)
+
+		if amtStr == "" {
+			return nil, errAmountRequired
+		}
+		if accName == "" {
+			return nil, errAccountRequired
+		}
+		amount, err := strconv.ParseFloat(amtStr, 64)
+		if err != nil || amount <= 0 {
+			return nil, "Invalid amount — enter a number like 45.50"
+		}
+		cents := int64(math.Round(amount * 100))
+
+		acc, err := svc.GetAccountByName(accName)
+		if err != nil {
+			return nil, fmt.Sprintf("Account %q not found", accName)
+		}
+
+		var catID *int64
+		if catName != "" {
+			c, err := svc.FindCategoryByName(catName)
+			if err != nil {
+				return nil, fmt.Sprintf("Category %q not found", catName)
+			}
+			catID = &c.ID
+		}
+
+		// Reverse old balance effect
+		oldDelta := oldAmount
+		if !oldType.IsCredit() {
+			oldDelta = -oldDelta
+		}
+		if err := svc.UpdateAccountBalance(oldAccountID, -oldDelta); err != nil {
+			return nil, fmt.Sprintf("Error reverting balance: %v", err)
+		}
+
+		// Update the transaction
+		if err := svc.UpdateTransaction(txID, acc.ID, catID, cents, date, payee, note, model.TxType(txType)); err != nil {
+			// re-apply old balance on failure
+			_ = svc.UpdateAccountBalance(oldAccountID, oldDelta)
+			return nil, fmt.Sprintf("Error updating transaction: %v", err)
+		}
+
+		// Apply new balance effect
+		newDelta := cents
+		if !model.TxType(txType).IsCredit() {
+			newDelta = -newDelta
+		}
+		if err := svc.UpdateAccountBalance(acc.ID, newDelta); err != nil {
+			return nil, fmt.Sprintf("Error updating balance: %v", err)
+		}
+
+		return func() tea.Msg {
+			txs, _ := svc.ListTransactions(filter)
+			return txDataMsg{txs}
+		}, ""
+	})
+}
+
 func (t *TransactionsModel) SetSize(w, h int) {
 	t.width = w
 	t.height = h
@@ -338,7 +474,9 @@ func (t TransactionsModel) View() string {
 	}
 
 	if len(t.txs) == 0 {
-		b.WriteString("  No transactions found. Press 'a' to add one or import with: budget import <file>\n")
+		b.WriteString("  No transactions found.\n")
+		b.WriteString("  Press " + lipgloss.NewStyle().Bold(true).Render("a") + " to add one")
+		b.WriteString(" or import with: " + lipgloss.NewStyle().Bold(true).Render("budget import <file>") + "\n")
 		return b.String()
 	}
 
@@ -404,8 +542,15 @@ func (t TransactionsModel) View() string {
 
 		if i == t.cursor {
 			line = selectedRowStyle.Render(line)
+		} else if i%2 == 1 {
+			line = altRowStyle.Render(line)
 		}
 		b.WriteString(line + "\n")
+	}
+
+	// Scroll indicator
+	if len(t.txs) > visible {
+		b.WriteString(renderScrollIndicator(start, end, len(t.txs), t.width))
 	}
 
 	if t.confirmDelete && t.cursor < len(t.txs) {
@@ -414,7 +559,11 @@ func (t TransactionsModel) View() string {
 			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).
 				Render(fmt.Sprintf("Delete \"%s\" (%s on %s)? y/N", tx.Payee, fmtMoney(tx.Amount), tx.Date))))
 	} else if t.statusMsg != "" {
-		b.WriteString("\n  " + lipgloss.NewStyle().Foreground(danger).Render(t.statusMsg))
+		style := lipgloss.NewStyle().Foreground(danger)
+		if t.statusIsGood {
+			style = lipgloss.NewStyle().Foreground(special)
+		}
+		b.WriteString("\n  " + style.Render(t.statusMsg))
 	} else {
 		b.WriteString(fmt.Sprintf("\n  %d transactions [%d/%d]", len(t.txs), t.cursor+1, len(t.txs)))
 	}

@@ -612,6 +612,8 @@ func (p PortfolioModel) viewPositions() string {
 
 		if i == p.cursor {
 			line = selectedRowStyle.Render(line)
+		} else if i%2 == 1 {
+			line = altRowStyle.Render(line)
 		}
 		sb.WriteString(line + "\n")
 
@@ -745,6 +747,8 @@ func (p PortfolioModel) viewVestSchedule() string {
 
 		if i == p.cursor {
 			line = selectedRowStyle.Render(line)
+		} else if i%2 == 1 {
+			line = altRowStyle.Render(line)
 		}
 		sb.WriteString(line + "\n")
 	}

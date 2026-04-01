@@ -20,6 +20,7 @@ type AccountsModel struct {
 	form          FormModel
 	confirmDelete bool
 	statusMsg     string
+	statusIsGood  bool
 }
 
 func (a AccountsModel) InputActive() bool { return a.form.Active() || a.confirmDelete }
@@ -51,16 +52,23 @@ func (a AccountsModel) Update(msg tea.Msg) (AccountsModel, tea.Cmd) {
 		a.accounts = msg.accounts
 		a.cursor = 0
 	case tea.KeyMsg:
-		a.statusMsg = ""
+		if a.statusMsg != "" && !a.confirmDelete {
+			a.statusMsg = ""
+			a.statusIsGood = false
+		}
+
 		if a.confirmDelete {
 			switch msg.String() {
 			case "y", "Y":
 				a.confirmDelete = false
 				if a.cursor < len(a.accounts) {
+					name := a.accounts[a.cursor].Name
 					if err := a.svc.DeleteAccount(a.accounts[a.cursor].ID); err != nil {
 						a.statusMsg = fmt.Sprintf("Error deleting account: %v", err)
 						return a, nil
 					}
+					a.statusMsg = fmt.Sprintf("Deleted %q", name)
+					a.statusIsGood = true
 					return a, a.Init()
 				}
 			default:
@@ -147,7 +155,9 @@ func (a AccountsModel) View() string {
 	sb.WriteString(headerStyle.Render("Accounts") + "\n\n")
 
 	if len(a.accounts) == 0 {
-		sb.WriteString("  No accounts yet. Press 'a' to add one.\n")
+		sb.WriteString("  No accounts yet.\n")
+		sb.WriteString("  Press " + lipgloss.NewStyle().Bold(true).Render("a") + " to add one,")
+		sb.WriteString(" or import with: " + lipgloss.NewStyle().Bold(true).Render("budget import <file>") + "\n")
 		return sb.String()
 	}
 
@@ -170,11 +180,13 @@ func (a AccountsModel) View() string {
 			line := fmt.Sprintf("    %-25s  %-12s  %10s", acc.Name, acc.Type, fmtMoney(acc.Balance))
 			if idx == a.cursor {
 				line = selectedRowStyle.Render(line)
+			} else if idx%2 == 1 {
+				line = altRowStyle.Render(line)
 			}
 			sb.WriteString(line + "\n")
 			idx++
 		}
-		sb.WriteString(fmt.Sprintf("    %-25s  %-12s  %10s\n", "", "Total", fmtMoney(totalAssets)))
+		sb.WriteString(fmt.Sprintf("    %-25s  %-12s  %10s\n", "", "Total", greenStyle.Render(fmtMoney(totalAssets))))
 	}
 
 	if len(liabilities) > 0 {
@@ -184,15 +196,21 @@ func (a AccountsModel) View() string {
 			line := fmt.Sprintf("    %-25s  %-12s  %10s", acc.Name, acc.Type, fmtMoney(acc.Balance))
 			if idx == a.cursor {
 				line = selectedRowStyle.Render(line)
+			} else if idx%2 == 1 {
+				line = altRowStyle.Render(line)
 			}
 			sb.WriteString(line + "\n")
 			idx++
 		}
-		sb.WriteString(fmt.Sprintf("    %-25s  %-12s  %10s\n", "", "Total", fmtMoney(totalLiabilities)))
+		sb.WriteString(fmt.Sprintf("    %-25s  %-12s  %10s\n", "", "Total", redStyle.Render(fmtMoney(totalLiabilities))))
 	}
 
 	nw := totalAssets - totalLiabilities
-	sb.WriteString(fmt.Sprintf("\n  Net Worth: %s", fmtMoney(nw)))
+	nwStyle := greenStyle
+	if nw < 0 {
+		nwStyle = redStyle
+	}
+	sb.WriteString(fmt.Sprintf("\n  Net Worth: %s", nwStyle.Bold(true).Render(fmtMoney(nw))))
 
 	if a.confirmDelete && a.cursor < len(a.accounts) {
 		acc := a.accounts[a.cursor]
@@ -200,7 +218,11 @@ func (a AccountsModel) View() string {
 			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).
 				Render(fmt.Sprintf("Delete account %q (%s)? y/N", acc.Name, fmtMoney(acc.Balance)))))
 	} else if a.statusMsg != "" {
-		sb.WriteString("\n\n  " + lipgloss.NewStyle().Foreground(danger).Render(a.statusMsg))
+		style := lipgloss.NewStyle().Foreground(danger)
+		if a.statusIsGood {
+			style = lipgloss.NewStyle().Foreground(special)
+		}
+		sb.WriteString("\n\n  " + style.Render(a.statusMsg))
 	} else {
 		sb.WriteString(fmt.Sprintf("\n\n  %d accounts [%d/%d]", len(a.accounts), a.cursor+1, len(a.accounts)))
 	}

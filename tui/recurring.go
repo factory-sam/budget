@@ -20,6 +20,7 @@ type RecurringModel struct {
 	form          FormModel
 	confirmDelete bool
 	statusMsg     string
+	statusIsGood  bool
 }
 
 func (r RecurringModel) InputActive() bool { return r.form.Active() || r.confirmDelete }
@@ -51,16 +52,23 @@ func (r RecurringModel) Update(msg tea.Msg) (RecurringModel, tea.Cmd) {
 		r.rules = msg.rules
 		r.cursor = 0
 	case tea.KeyMsg:
-		r.statusMsg = ""
+		if r.statusMsg != "" && !r.confirmDelete {
+			r.statusMsg = ""
+			r.statusIsGood = false
+		}
+
 		if r.confirmDelete {
 			switch msg.String() {
 			case "y", "Y":
 				r.confirmDelete = false
 				if r.cursor < len(r.rules) {
+					payee := r.rules[r.cursor].Payee
 					if err := r.svc.DeleteRecurringRule(r.rules[r.cursor].ID); err != nil {
 						r.statusMsg = fmt.Sprintf("Error deleting rule: %v", err)
 						return r, nil
 					}
+					r.statusMsg = fmt.Sprintf("Deleted %q", payee)
+					r.statusIsGood = true
 					return r, r.Init()
 				}
 			default:
@@ -118,10 +126,10 @@ func (r *RecurringModel) newAddForm() FormModel {
 			return nil, "Payee is required"
 		}
 		if amtStr == "" {
-			return nil, "Amount is required"
+			return nil, errAmountRequired
 		}
 		if accName == "" {
-			return nil, "Account is required"
+			return nil, errAccountRequired
 		}
 		if startDate == "" {
 			return nil, "Start date is required"
@@ -182,7 +190,9 @@ func (r RecurringModel) View() string {
 	sb.WriteString(headerStyle.Render("Recurring Transactions") + "\n\n")
 
 	if len(r.rules) == 0 {
-		sb.WriteString("  No recurring rules. Press 'a' to add one.\n")
+		sb.WriteString("  No recurring rules yet.\n")
+		sb.WriteString("  Press " + lipgloss.NewStyle().Bold(true).Render("a") + " to add one ")
+		sb.WriteString("(e.g. rent, subscriptions, salary).\n")
 		return sb.String()
 	}
 
@@ -201,6 +211,8 @@ func (r RecurringModel) View() string {
 
 		if i == r.cursor {
 			line = selectedRowStyle.Render(line)
+		} else if i%2 == 1 {
+			line = altRowStyle.Render(line)
 		}
 		sb.WriteString(line + "\n")
 	}
@@ -211,7 +223,11 @@ func (r RecurringModel) View() string {
 			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).
 				Render(fmt.Sprintf("Delete recurring rule %q (%s)? y/N", rule.Payee, fmtMoney(rule.Amount)))))
 	} else if r.statusMsg != "" {
-		sb.WriteString("\n  " + lipgloss.NewStyle().Foreground(danger).Render(r.statusMsg))
+		style := lipgloss.NewStyle().Foreground(danger)
+		if r.statusIsGood {
+			style = lipgloss.NewStyle().Foreground(special)
+		}
+		sb.WriteString("\n  " + style.Render(r.statusMsg))
 	} else {
 		sb.WriteString(fmt.Sprintf("\n  %d rules [%d/%d]", len(r.rules), r.cursor+1, len(r.rules)))
 	}

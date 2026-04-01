@@ -256,6 +256,35 @@ CREATE TABLE IF NOT EXISTS equity_vest_events (
 	lot_id INTEGER,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS paychecks (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	date TEXT NOT NULL,
+	employer TEXT NOT NULL DEFAULT '',
+	gross_pay INTEGER NOT NULL,
+	federal_tax INTEGER NOT NULL DEFAULT 0,
+	state_tax INTEGER NOT NULL DEFAULT 0,
+	social_security INTEGER NOT NULL DEFAULT 0,
+	medicare INTEGER NOT NULL DEFAULT 0,
+	health_insurance INTEGER NOT NULL DEFAULT 0,
+	retirement_401k INTEGER NOT NULL DEFAULT 0,
+	other_deductions INTEGER NOT NULL DEFAULT 0,
+	net_pay INTEGER NOT NULL,
+	tx_id INTEGER REFERENCES transactions(id),
+	note TEXT NOT NULL DEFAULT '',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS reconciliations (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	account_id INTEGER NOT NULL REFERENCES accounts(id),
+	date TEXT NOT NULL,
+	actual_balance INTEGER NOT NULL,
+	calculated_balance INTEGER NOT NULL,
+	discrepancy INTEGER NOT NULL DEFAULT 0,
+	note TEXT NOT NULL DEFAULT '',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 func SeedCategories(db *sql.DB) error {
