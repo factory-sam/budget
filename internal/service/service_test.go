@@ -581,10 +581,9 @@ func TestListAutoCatRules(t *testing.T) {
 // ---------- 8. Net Worth Snapshot ----------
 
 func TestSnapshotNetWorth(t *testing.T) {
-	t.Parallel()
 	svc := newTestService(t)
 
-	// Clear equity funcs for this test
+	// Clear equity funcs for this test (not parallel — writes package-level vars)
 	origGetEquity := GetEquityValue
 	origGetAccountEquity := GetAccountEquityValue
 	GetEquityValue = nil
@@ -670,9 +669,9 @@ func TestSnapshotNetWorth(t *testing.T) {
 }
 
 func TestSnapshotNetWorth_History(t *testing.T) {
-	t.Parallel()
 	svc := newTestService(t)
 
+	// Not parallel — writes package-level vars
 	origGetEquity := GetEquityValue
 	origGetAccountEquity := GetAccountEquityValue
 	GetEquityValue = nil
