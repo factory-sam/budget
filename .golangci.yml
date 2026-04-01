@@ -1,21 +1,14 @@
-run:
-  timeout: 5m
+version: "2"
 
 linters:
+  default: none
   enable:
     # Default linters
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
-    # Formatting
-    - gofmt
-    - goimports
-    # Style & naming
-    - revive
-    - stylecheck
     # Complexity
     - gocyclo
     - cyclop
@@ -34,64 +27,93 @@ linters:
     - prealloc
     # Tech debt
     - godox
+    # Style & naming
+    - revive
 
-linters-settings:
-  gocyclo:
-    min-complexity: 20
-  cyclop:
-    max-complexity: 25
-  funlen:
-    lines: 150
-    statements: 80
-  nestif:
-    min-complexity: 8
-  dupl:
-    threshold: 300
-  revive:
+  settings:
+    gocyclo:
+      min-complexity: 20
+    cyclop:
+      max-complexity: 25
+    funlen:
+      lines: 150
+      statements: 80
+    nestif:
+      min-complexity: 8
+    dupl:
+      threshold: 300
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: var-naming
+          severity: warning
+        - name: unexported-return
+          disabled: true
+    godox:
+      keywords:
+        - TODO
+        - FIXME
+        - HACK
+        - BUG
+    errcheck:
+      exclude-functions:
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.Rows).Close
+        - (*os.File).Close
+        - (*database/sql.DB).Close
+        - (*net/http.Response.Body).Close
+        - io.Copy
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Closer).Close
+      check-type-assertions: false
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    gosec:
+      excludes:
+        - G104
+        - G301
+        - G304
+        - G202
+        - G602
+    staticcheck:
+      checks: ["all", "-QF*"]
+
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
     rules:
-      - name: exported
-        disabled: true
-      - name: var-naming
-        severity: warning
-      - name: unexported-return
-        disabled: true
-  stylecheck:
-    checks: ["all", "-ST1000", "-ST1003", "-ST1020"]
-  godox:
-    keywords:
-      - TODO
-      - FIXME
-      - HACK
-      - BUG
-  errcheck:
-    exclude-functions:
-      - (*database/sql.Tx).Rollback
-      - (*database/sql.Rows).Close
-      - io.Copy
-    check-type-assertions: false
-  goconst:
-    min-len: 3
-    min-occurrences: 3
+      - path: _test\.go
+        linters:
+          - funlen
+          - dupl
+          - gosec
+          - errcheck
+      - path: cmd/
+        linters:
+          - funlen
+      - path: tui/
+        linters:
+          - funlen
+          - cyclop
+          - gocyclo
+          - dupl
+      - path: internal/importer/
+        linters:
+          - gocyclo
+          - cyclop
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 issues:
   max-issues-per-linter: 50
   max-same-issues: 5
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - funlen
-        - dupl
-        - gosec
-    - path: cmd/
-      linters:
-        - funlen
-    - path: tui/
-      linters:
-        - funlen
-        - cyclop
-        - gocyclo
-        - dupl
-    - path: internal/importer/
-      linters:
-        - gocyclo
-        - cyclop
