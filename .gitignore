@@ -1,2 +1,32 @@
+# Build output
 budget
+dist/
+
+# Database files
 *.db
+*.db-shm
+*.db-wal
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# IDE configs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test / coverage artifacts
+coverage.out
+test-results.xml
+test-results.json
+
+# Go
+vendor/
