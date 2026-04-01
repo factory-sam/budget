@@ -9,6 +9,8 @@ import (
 	"github.com/sam/budget/internal/model"
 )
 
+const grantTypeISO = "iso"
+
 type GrantService struct {
 	db        *sql.DB
 	prices    *PriceService
@@ -279,7 +281,7 @@ func (g *GrantService) ExerciseISO(vestEventID int64, fmvAtExerciseCents int64) 
 	if err != nil {
 		return nil, err
 	}
-	if grant.GrantType != "iso" {
+	if grant.GrantType != grantTypeISO {
 		return nil, fmt.Errorf("grant %d is %s, not ISO", grantID, grant.GrantType)
 	}
 	if grant.StrikePrice == nil {

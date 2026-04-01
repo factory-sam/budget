@@ -172,13 +172,13 @@ func (e *EquityCSVImporter) processRow(row []string, cols equityColMap, accountI
 	case "dividend":
 		e.handleDividend(accountID, rf.symbol, rf.amountStr, rf.desc, rf.date, i, result)
 	case "fund_outflow":
-		e.handleSimpleTransaction(accountID, rf.amountStr, rf.desc, rf.date, model.TxExpense, "", i, result, &result.Purchases)
+		e.handleSimpleTransaction(accountID, rf.amountStr, rf.desc, rf.date, model.TxTransferOut, "Bought Equity", i, result, &result.Purchases)
 	case "deposit":
 		e.handleDeposit(accountID, rf.amountStr, rf.desc, rf.date, i, result)
 	case "interest":
 		e.handleSimpleTransaction(accountID, rf.amountStr, rf.desc, rf.date, model.TxIncome, "Bank Interest", i, result, &result.Dividends)
 	case txTypeFee:
-		e.handleSimpleTransaction(accountID, rf.amountStr, rf.desc, rf.date, model.TxExpense, "", i, result, &result.Purchases)
+		e.handleSimpleTransaction(accountID, rf.amountStr, rf.desc, rf.date, model.TxTransferOut, "", i, result, &result.Purchases)
 	case "reinvest_shares":
 		result.Skipped++ // $0 share allocation entries
 	default:
@@ -353,7 +353,11 @@ func (e *EquityCSVImporter) handleSimpleTransaction(accountID *int64, amountStr,
 			Type:      txType,
 		}
 		if autoCatPayee != "" {
-			tx.CategoryID = e.svc.AutoCategorize(autoCatPayee)
+			if cat, err := e.svc.FindCategoryByName(autoCatPayee); err == nil {
+				tx.CategoryID = &cat.ID
+			} else {
+				tx.CategoryID = e.svc.AutoCategorize(autoCatPayee)
+			}
 		}
 		if _, err := e.svc.CreateTransaction(tx); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("row %d: create %s tx: %v", i+1, txType, err))

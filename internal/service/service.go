@@ -126,7 +126,7 @@ func (s *Service) RecalculateAccountBalance(id int64) error {
 	var balance int64
 	err = s.db.QueryRow(`
 		SELECT COALESCE(
-			SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END),
+			SUM(CASE WHEN type IN ('income', 'transfer_in') THEN amount ELSE -amount END),
 			0)
 		FROM transactions WHERE account_id = ?`, id).Scan(&balance)
 	if err != nil {
@@ -258,7 +258,7 @@ func (s *Service) CreateTransaction(tx model.Transaction) (*model.Transaction, e
 
 	// update account balance
 	delta := tx.Amount
-	if tx.Type == model.TxExpense || tx.Type == model.TxTransfer {
+	if !tx.Type.IsCredit() {
 		delta = -delta
 	}
 	if err := s.UpdateAccountBalance(tx.AccountID, delta); err != nil {
@@ -351,11 +351,8 @@ func (s *Service) DeleteTransaction(id int64) error {
 	}
 	// reverse balance change
 	delta := amount
-	switch model.TxType(txType) {
-	case model.TxIncome:
+	if model.TxType(txType).IsCredit() {
 		delta = -delta
-	case model.TxExpense, model.TxTransfer:
-		// was deducted, so add back
 	}
 	return s.UpdateAccountBalance(accountID, delta)
 }

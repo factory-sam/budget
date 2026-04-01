@@ -36,10 +36,20 @@ func IsInvestmentAccount(t AccountType) bool {
 type TxType string
 
 const (
-	TxExpense  TxType = "expense"
-	TxIncome   TxType = "income"
-	TxTransfer TxType = "transfer"
+	TxExpense     TxType = "expense"
+	TxIncome      TxType = "income"
+	TxTransfer    TxType = "transfer" // legacy, migrated to transfer_out
+	TxTransferOut TxType = "transfer_out"
+	TxTransferIn  TxType = "transfer_in"
 )
+
+func (t TxType) IsTransfer() bool {
+	return t == TxTransfer || t == TxTransferOut || t == TxTransferIn
+}
+
+func (t TxType) IsCredit() bool {
+	return t == TxIncome || t == TxTransferIn
+}
 
 type Frequency string
 

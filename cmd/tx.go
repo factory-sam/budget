@@ -72,7 +72,7 @@ var txAddCmd = &cobra.Command{
 		if categoryID != nil {
 			ccCat, _ := service.FindCategoryByName("Credit Card Payment")
 			if ccCat != nil && *categoryID == ccCat.ID {
-				txType = "transfer"
+				txType = "transfer_out"
 			}
 		}
 

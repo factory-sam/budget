@@ -125,7 +125,7 @@ func (c *CSVImporter) processRecord(record []string, colMap columnMap, accountID
 	if catID != nil {
 		cat, _ := c.svc.FindCategoryByName("Credit Card Payment")
 		if cat != nil && *catID == cat.ID {
-			txType = model.TxTransfer
+			txType = model.TxTransferOut
 		}
 	}
 

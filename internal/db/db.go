@@ -45,6 +45,8 @@ var migrations = []string{
 	"ALTER TABLE equity_grants ADD COLUMN fmv_at_grant INTEGER",
 	"ALTER TABLE equity_grants ADD COLUMN vesting_start_date TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE networth_snapshots ADD COLUMN equity_value INTEGER NOT NULL DEFAULT 0",
+	"UPDATE transactions SET type = 'transfer_out' WHERE type = 'transfer'",
+	"UPDATE recurring_rules SET type = 'transfer_out' WHERE type = 'transfer'",
 }
 
 func migrateCategories(db *sql.DB) {
@@ -66,6 +68,32 @@ func migrateCategories(db *sql.DB) {
 		_ = db.QueryRow("SELECT COUNT(*) FROM categories WHERE group_id = ? AND name = 'Credit Card Payment'", transferGroupID).Scan(&exists)
 		if exists == 0 {
 			_, _ = db.Exec("INSERT INTO categories (group_id, name, sort_order) VALUES (?, 'Credit Card Payment', 1)", transferGroupID)
+		}
+	}
+
+	// Add "Investments" group with equity categories
+	var investGroupID int64
+	err = db.QueryRow("SELECT id FROM category_groups WHERE name = 'Investments'").Scan(&investGroupID)
+	if err != nil {
+		res, err := db.Exec("INSERT INTO category_groups (name, sort_order) VALUES ('Investments', 8)")
+		if err == nil {
+			investGroupID, _ = res.LastInsertId()
+			// Shift Transfers and Uncategorized down
+			if _, err := db.Exec("UPDATE category_groups SET sort_order = 10 WHERE name = 'Uncategorized'"); err != nil {
+				return
+			}
+			if _, err := db.Exec("UPDATE category_groups SET sort_order = 9 WHERE name = 'Transfers'"); err != nil {
+				return
+			}
+		}
+	}
+	if investGroupID > 0 {
+		for i, name := range []string{"Bought Equity", "Sold Equity"} {
+			var exists int
+			_ = db.QueryRow("SELECT COUNT(*) FROM categories WHERE group_id = ? AND name = ?", investGroupID, name).Scan(&exists)
+			if exists == 0 {
+				_, _ = db.Exec("INSERT INTO categories (group_id, name, sort_order) VALUES (?, ?, ?)", investGroupID, name, i)
+			}
 		}
 	}
 }

@@ -322,9 +322,13 @@ func (d DashboardModel) renderRecentTxs() string {
 	for _, t := range d.recentTxs {
 		sign := "-"
 		style := redStyle
-		if t.Type == model.TxIncome {
+		if t.Type.IsCredit() {
 			sign = "+"
 			style = greenStyle
+		}
+		if t.Type.IsTransfer() {
+			sign = "~"
+			style = lipgloss.NewStyle().Foreground(muted)
 		}
 		s += fmt.Sprintf("  %s  %-25s  %s  %s\n",
 			t.Date,

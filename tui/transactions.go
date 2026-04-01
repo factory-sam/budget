@@ -206,16 +206,17 @@ func (t TransactionsModel) Update(msg tea.Msg) (TransactionsModel, tea.Cmd) {
 		case "t":
 			if len(t.txs) > 0 && t.cursor < len(t.txs) {
 				tx := t.txs[t.cursor]
-				// Only toggle between expense <-> transfer (both are outflows)
-				// Income stays as income — use 'c' to categorize instead
+				// Cycle: expense -> transfer_out -> transfer_in -> income -> expense
 				var newType model.TxType
 				switch tx.Type {
 				case model.TxExpense:
-					newType = model.TxTransfer
-				case model.TxTransfer:
+					newType = model.TxTransferOut
+				case model.TxTransfer, model.TxTransferOut:
+					newType = model.TxTransferIn
+				case model.TxTransferIn:
+					newType = model.TxIncome
+				case model.TxIncome:
 					newType = model.TxExpense
-				default:
-					break
 				}
 				if newType != "" {
 					if err := t.svc.UpdateTransactionType(tx.ID, newType); err != nil {
@@ -242,7 +243,7 @@ func (t *TransactionsModel) newAddForm() FormModel {
 		{Label: "Payee", Placeholder: "e.g. Whole Foods"},
 		{Label: "Category", Placeholder: "e.g. Groceries"},
 		{Label: "Account", Placeholder: "e.g. Checking"},
-		{Label: "Type", Value: "expense", Options: []string{"expense", "income", "transfer"}},
+		{Label: "Type", Value: "expense", Options: []string{"expense", "income", "transfer_out", "transfer_in"}},
 		{Label: "Date", Value: time.Now().Format("2006-01-02")},
 		{Label: "Note", Placeholder: "optional"},
 	}, func(fields []FormField) (tea.Cmd, string) {
@@ -379,19 +380,26 @@ func (t TransactionsModel) View() string {
 		tx := t.txs[i]
 		sign := "-"
 		style := redStyle
-		if tx.Type == model.TxIncome {
+		typeLabel := string(tx.Type)
+		if tx.Type.IsCredit() {
 			sign = "+"
 			style = greenStyle
-		} else if tx.Type == model.TxTransfer {
+		}
+		if tx.Type.IsTransfer() {
 			sign = "~"
 			style = lipgloss.NewStyle().Foreground(muted)
+			if tx.Type == model.TxTransferIn {
+				typeLabel = "xfer in"
+			} else {
+				typeLabel = "xfer out"
+			}
 		}
 		rawAmount := fmt.Sprintf("%s%s", sign, fmtMoney(tx.Amount))
 		paddedAmount := fmt.Sprintf("%10s", rawAmount)
 		amountStr := style.Render(paddedAmount)
 
 		line := fmt.Sprintf("  %-10s  %-*s  %s  %-8s  %-*s  %-*s",
-			tx.Date, payeeW, truncStr(tx.Payee, payeeW), amountStr, string(tx.Type),
+			tx.Date, payeeW, truncStr(tx.Payee, payeeW), amountStr, typeLabel,
 			catW, truncStr(tx.CategoryName, catW), acctW, truncStr(tx.AccountName, acctW))
 
 		if i == t.cursor {
