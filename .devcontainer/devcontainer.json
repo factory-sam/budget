@@ -1,0 +1,30 @@
+{
+  "name": "budget",
+  "image": "mcr.microsoft.com/devcontainers/go:1-1.25-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "go.lintTool": "golangci-lint",
+        "go.lintFlags": ["--fast"],
+        "go.useLanguageServer": true,
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "golang.go",
+        "[go]": {
+          "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+          }
+        }
+      },
+      "extensions": [
+        "golang.go",
+        "eamodio.gitlens",
+        "github.copilot"
+      ]
+    }
+  },
+  "postCreateCommand": "go mod download && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && go install gotest.tools/gotestsum@latest && go build -o budget .",
+  "remoteUser": "vscode"
+}
